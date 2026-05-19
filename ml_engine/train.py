@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import warnings
+import joblib
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
 from sklearn.ensemble import RandomForestClassifier
@@ -125,9 +127,39 @@ def evaluate_multiple_models(X_train, X_test, y_train, y_test, feature_names):
         
     return results_df, best_model
 
+def pack_model(model, label_encoder, model_name: str = 'xgboost_pitch_model'):
+    """
+    [우승 모델 패킹 (Packing)]
+    - 목적: 실전 서빙을 위한 모델 아티팩트 영구 저장
+    - 저장 대상: 우승 모델 객체, 라벨 인코더 객체
+    """
+    # - 디렉토리 생성: 모델 저장용 폴더 확인 및 자동 생성
+    model_dir = Path('ml_engine/models')
+    model_dir.mkdir(parents=True, exist_ok=True)
+    
+    # - 모델 저장: joblib을 이용한 우승 모델 직렬화 (압축 레벨 3 적용)
+    model_path = model_dir / f'{model_name}.pkl'
+    joblib.dump(model, model_path, compress=3)
+    
+    # - 라벨 인코더 저장: 구종 복원을 위한 인코더 직렬화
+    encoder_path = model_dir / 'label_encoder.pkl'
+    joblib.dump(label_encoder, encoder_path, compress=3)
+    
+    # - 저장 결과 검증 및 출력: 경로, 용량 확인
+    model_size_kb = model_path.stat().st_size / 1024
+    encoder_size_kb = encoder_path.stat().st_size / 1024
+    
+    print(f"\n정훈 님, XGBoost 모델 및 라벨 인코더 패킹이 성공적으로 완료되었습니다!")
+    print(f" - 🏆 모델 저장 경로: {model_path} ({model_size_kb:.1f} KB)")
+    print(f" - 🔑 인코더 저장 경로: {encoder_path} ({encoder_size_kb:.1f} KB)")
+    print(f" - ✅ FastAPI 백엔드에서 joblib.load('{model_path}')로 즉시 로드 가능")
+
 if __name__ == "__main__":
     # - 벤치마크 테스트 실행: 데이터 샘플링 10% 기반 빠른 검증
     X_train, X_test, y_train, y_test, feat_names, label_encoder = prepare_training_data(sampling_rate=0.1)
     
     # - 평가 파이프라인 구동
     results_table, best_model = evaluate_multiple_models(X_train, X_test, y_train, y_test, feat_names)
+    
+    # - 모델 패킹 실행: 우승 모델 및 라벨 인코더 영구 저장
+    pack_model(best_model, label_encoder)
