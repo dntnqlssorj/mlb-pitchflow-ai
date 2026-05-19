@@ -36,9 +36,9 @@ class PitchInferenceInput(BaseModel):
     # - 타자 식별
     batter: Optional[int] = Field(None, description="타자 MLB player_id")
     
-    # - 포수 및 위기 상황
+    # - 포수 및 득점권(RISP) 상황
     fielder_2: Optional[int] = Field(None, description="포수 MLB player_id")
-    is_crisis: int = Field(0, description="위기 상황 여부 (3루 주자 존재 시 1)")
+    is_risp: int = Field(0, description="득점권 주자 여부 (2루 또는 3루에 주자 존재 시 1)")
     blocking_leverage_factor: float = Field(0.0, description="포수 블로킹 레버리지 팩터")
     catcher_blocking_runs: float = Field(0.0, description="포수 블로킹 런 수치")
     

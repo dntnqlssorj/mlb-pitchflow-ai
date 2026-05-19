@@ -86,12 +86,13 @@ def integrate_catcher_blocking(bat_tracking_df: pd.DataFrame, blocking_df: pd.Da
     # - 결측치 처리: 블로킹 지표가 없는 포수는 평균치인 0으로 일괄 대체
     df_feat['catcher_blocking_runs'] = df_feat['catcher_blocking_runs'].fillna(0)
     
-    # - 위기 상황 파생 변수 생성: 3루 주자(on_3b)가 0이 아니면 위기(1), 아니면 평시(0)로 식별
-    df_feat['is_crisis'] = (df_feat['on_3b'] != 0).astype(int)
+    # - 득점권(RISP) 파생 변수 생성: 2루 또는 3루 주자 존재 시 1, 평시 0
+    # - 근거: 포수 블로킹 부담 및 투수 구종 압박은 3루 단독이 아닌 득점권 전체 상황에서 동일하게 작동
+    df_feat['is_risp'] = ((df_feat['on_2b'] != 0) | (df_feat['on_3b'] != 0)).astype(int)
     
-    # - 블로킹 레버리지 팩터 산출: 위기 상황에서 포수의 블로킹 런스에 비례해 가중치 부여
-    # - 특성: 포수 블로킹 능력이 좋을수록 양수 값 상승 -> 떨어지는 공(포크/커브 등) 구사 확률 증가 힌트
-    df_feat['blocking_leverage_factor'] = df_feat['is_crisis'] * df_feat['catcher_blocking_runs'] * 0.1
+    # - 블로킹 레버리지 팩터 산출: 득점권 상황에서 포수 블로킹 런스에 비례한 가중치 부여
+    # - 특성: 포수 블로킹 능력이 좋을수록 양수 값 상승 → 떨어지는 공(포크/커브 등) 구사 확률 증가 힌트
+    df_feat['blocking_leverage_factor'] = df_feat['is_risp'] * df_feat['catcher_blocking_runs'] * 0.1
     
     print("✅ 포수 블로킹 결합 완료!")
     return df_feat
