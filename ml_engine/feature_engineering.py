@@ -86,12 +86,11 @@ def integrate_catcher_blocking(bat_tracking_df: pd.DataFrame, blocking_df: pd.Da
     # - 결측치 처리: 블로킹 지표가 없는 포수는 평균치인 0으로 일괄 대체
     df_feat['catcher_blocking_runs'] = df_feat['catcher_blocking_runs'].fillna(0)
     
-    # - 득점권(RISP) 파생 변수 생성: 2루 또는 3루 주자 존재 시 1, 평시 0
-    # - 근거: 포수 블로킹 부담 및 투수 구종 압박은 3루 단독이 아닌 득점권 전체 상황에서 동일하게 작동
+    # - 득점권 상황 파생 변수 생성: 2루(on_2b) 또는 3루(on_3b) 주자가 존재하면 득점권(1), 아니면 평시(0)로 식별
     df_feat['is_risp'] = ((df_feat['on_2b'] != 0) | (df_feat['on_3b'] != 0)).astype(int)
     
-    # - 블로킹 레버리지 팩터 산출: 득점권 상황에서 포수 블로킹 런스에 비례한 가중치 부여
-    # - 특성: 포수 블로킹 능력이 좋을수록 양수 값 상승 → 떨어지는 공(포크/커브 등) 구사 확률 증가 힌트
+    # - 블로킹 레버리지 팩터 산출: 득점권 상황에서 포수의 블로킹 런스에 비례해 가중치 부여
+    # - 특성: 포수 블로킹 능력이 좋을수록 양수 값 상승 -> 떨어지는 공(포크/커브 등) 구사 확률 증가 힌트
     df_feat['blocking_leverage_factor'] = df_feat['is_risp'] * df_feat['catcher_blocking_runs'] * 0.1
     
     print("✅ 포수 블로킹 결합 완료!")
@@ -145,16 +144,16 @@ if __name__ == "__main__":
     # 3. 야수 OAA 결합
     feat_df = integrate_fielding_oaa(feat_df, oaa_df)
     
-    # 파생 변수 확인 (투구 수 80구 초과 및 위기 상황 샘플)
+    # 파생 변수 확인 (투구 수 80구 초과 및 득점권 상황 샘플)
     print("\n🔍 [검증] 전체 파이프라인 결합 완료. 최종 파생 변수 확인 (상위 10개 행):")
     cols_to_show = [
         'game_pk', 'pitcher', 'pitch_count_in_game', 'stamina_index',
-        'is_crisis', 'blocking_leverage_factor', 
+        'is_risp', 'blocking_leverage_factor', 
         'team_oaa_total', 'fielding_risk_index'
     ]
     
-    # 위기 상황(3루 주자 존재) 및 투구 수가 어느 정도 누적된 행 필터링
-    sample_view = feat_df[(feat_df['pitch_count_in_game'] > 60) & (feat_df['is_crisis'] == 1)][cols_to_show].head(10)
+    # 득점권 상황 및 투구 수가 어느 정도 누적된 행 필터링
+    sample_view = feat_df[(feat_df['pitch_count_in_game'] > 60) & (feat_df['is_risp'] == 1)][cols_to_show].head(10)
     if sample_view.empty:
         sample_view = feat_df[cols_to_show].head(10)
         
