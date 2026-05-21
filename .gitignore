@@ -24,3 +24,5 @@ saved_models/cache_matrix/*
 .env
 .vscode/
 .DS_Store
+.claude/
+.gemini/
