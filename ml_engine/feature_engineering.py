@@ -1,161 +1,268 @@
+# ==============================================================================
+# MLB PitchFlow AI - 도메인 피처 엔지니어링
+# 변경 이력: 2026-05-21 Target Leakage 제거 (research.md §2.4 기준)
+#   - build_season_baseline() 신설: 시즌 집계 베이스라인 사전 산출
+#   - calculate_pitcher_stamina_decay() 재설계:
+#       경기 내 첫 N구 평균 → 시즌 집계 + shift(1) rolling 이동 평균으로 전환
+#       현재 투구의 release_speed/release_spin_rate 직접 참조 완전 배제
+# ==============================================================================
+
 import pandas as pd
 import numpy as np
-from ml_engine.datasets import get_clean_datasets
+from ml_engine.config import STAMINA_BASELINE_PITCHES
 
-def calculate_pitcher_stamina_decay(df: pd.DataFrame, baseline_pitches: int = 15) -> pd.DataFrame:
+
+def build_season_baseline(bat_df: pd.DataFrame) -> pd.DataFrame:
     """
-    [투수 체력 저하 가중치 알고리즘]
-    - 목적: AI 모델의 투수 체력 상태 인지
-    - 방법: 경기 초반 평균 구속/회전수 기준점 설정 후 실시간 감쇠율 계산
-    
+    [시즌 집계 베이스라인 산출]
+    - 목적: 투수별 시즌 전체 평균 구속/회전수를 사전 집계하여 stamina 계산의
+            누수 없는 기준점(reference) 제공
+    - 호출 위치: train.py의 샘플링(sample()) 이전 단계에서 전체 bat_df 대상으로 반드시 호출
+    - 누수 근거: 경기 내 첫 N구 평균은 현재 투구의 release_speed를 포함하므로 100% 누수.
+                시즌 집계값은 과거 전체 등판 데이터 기반이므로 투구 이전 시점에 확정된 값.
+
     Args:
-        df: 타구 추적(bat tracking) 데이터프레임
-        baseline_pitches: 기준점 계산용 경기 초반 투구 수 (기본값: 15구)
+        bat_df: 전체(미샘플링) bat_tracking DataFrame
+                필수 컬럼: pitcher, game_year, release_speed, release_spin_rate
+
+    Returns:
+        DataFrame: [pitcher, game_year, season_avg_speed, season_avg_spin]
     """
-    print(f"⚾️ 투수 체력 저하 피처 엔지니어링 시작 (기준 투구 수: {baseline_pitches}구)...")
-    
-    # 원본 데이터 보호 (복사본 생성)
+    print("시즌 집계 베이스라인 산출 중 (전체 데이터 기준)...")
+
+    baseline = (
+        bat_df
+        .groupby(['pitcher', 'game_year'])[['release_speed', 'release_spin_rate']]
+        .mean()
+        .reset_index()
+        .rename(columns={
+            'release_speed':     'season_avg_speed',
+            'release_spin_rate': 'season_avg_spin',
+        })
+    )
+
+    print(f"베이스라인 산출 완료: {len(baseline)}개 (투수 × 시즌) 페어")
+    return baseline
+
+
+def calculate_pitcher_stamina_decay(
+    df: pd.DataFrame,
+    season_baseline_df: pd.DataFrame,
+    baseline_pitches: int = STAMINA_BASELINE_PITCHES,
+) -> pd.DataFrame:
+    """
+    [투수 체력 저하 피처 엔지니어링 — 누수 제거 버전]
+    - 목적: AI 모델의 투수 체력 상태 인지
+    - 변경 전: base_speed = 동일 경기 내 첫 N구 release_speed 평균 (현재 투구 포함 → 누수)
+    - 변경 후: base_speed = 시즌 전체 집계 평균 (season_baseline_df에서 조인, 누수 없음)
+               velocity_decay_ratio = shift(1) rolling 평균 / base_speed
+               → shift(1): 현재 투구 자신을 이동 평균에서 배제하는 핵심 누수 차단 장치
+
+    Args:
+        df: (샘플링된) bat_tracking DataFrame
+        season_baseline_df: build_season_baseline() 반환값
+                            컬럼: [pitcher, game_year, season_avg_speed, season_avg_spin]
+        baseline_pitches: rolling 이동 평균 window 크기 (기본값 15, 파라미터명 유지)
+
+    Returns:
+        DataFrame: 원본 + [pitch_count_in_game, base_speed, base_spin,
+                           velocity_decay_ratio, spin_decay_ratio, stamina_index]
+    """
+    print(f"투수 체력 저하 피처 엔지니어링 시작 (rolling window: {baseline_pitches}구)...")
+
     df_feat = df.copy()
-    
-    # 1. [데이터 정렬]
-    # - 투구 수 누적 계산을 위한 선행 작업
-    # - 정렬 기준: 경기(game_pk) -> 투수(pitcher) -> 타석(at_bat_number) -> 투구(pitch_number)
-    df_feat = df_feat.sort_values(by=['game_pk', 'pitcher', 'at_bat_number', 'pitch_number']).reset_index(drop=True)
-    
-    # 2. [경기 내 투구 수 누적 계산]
-    # - 대용량 처리를 위해 Pandas groupby, cumcount 벡터화 연산 적용
-    # - 경기별/투수별 누적 투구 수 산출 (+1로 1구부터 시작)
-    df_feat['pitch_count_in_game'] = df_feat.groupby(['game_pk', 'pitcher']).cumcount() + 1
-    
-    # 3. [베이스라인 추출]
-    # - 기준점: 투수별 해당 경기 첫 N구(baseline_pitches)
-    # - 산출 지표: 평균 구속(release_speed), 평균 회전수(release_spin_rate)
-    baseline_mask = df_feat['pitch_count_in_game'] <= baseline_pitches
-    baseline_df = df_feat[baseline_mask].groupby(['game_pk', 'pitcher'])[['release_speed', 'release_spin_rate']].mean().reset_index()
-    
-    # - 컬럼명 직관적 변경 (base_speed, base_spin)
-    baseline_df = baseline_df.rename(columns={
-        'release_speed': 'base_speed',
-        'release_spin_rate': 'base_spin'
-    })
-    
-    # 4. [데이터 병합 (Join)]
-    # - 산출된 베이스라인 데이터를 원본 데이터프레임에 병합 (Left Join)
-    df_feat = df_feat.merge(baseline_df, on=['game_pk', 'pitcher'], how='left')
-    
-    # 5. [실시간 감쇠 지표 계산 (Decay Ratio)]
-    # - 현재 구속/회전수를 베이스라인 대비 비율로 계산 (1.0 = 유지, 0.95 = 5% 하락)
-    df_feat['velocity_decay_ratio'] = df_feat['release_speed'] / df_feat['base_speed']
-    df_feat['spin_decay_ratio'] = df_feat['release_spin_rate'] / df_feat['base_spin']
-    
-    # - 예외 처리: 데이터 누락 또는 기준점 미달 시 1.0(정상)으로 결측치 보정
-    df_feat['velocity_decay_ratio'] = df_feat['velocity_decay_ratio'].fillna(1.0)
-    df_feat['spin_decay_ratio'] = df_feat['spin_decay_ratio'].fillna(1.0)
-    
-    # 6. [체력 지수(Stamina Index) 계산]
-    # - 하락폭 계산 (1.0 - 감쇠율)
-    vel_drop = 1.0 - df_feat['velocity_decay_ratio']
-    spin_drop = 1.0 - df_feat['spin_decay_ratio']
-    
-    # - 보정: 구속/회전수가 상승한 경우(음수 발생) 0으로 처리 (체력 저하 없음)
-    vel_drop = np.maximum(vel_drop, 0)
-    spin_drop = np.maximum(spin_drop, 0)
-    
-    # - 종합 지수 산출식: (투구 수 / 100) * (구속 하락폭*0.7 + 회전수 하락폭*0.3)
-    # - 특성: 투구 수가 많고 구속 하락이 클수록 지수 급증
-    df_feat['stamina_index'] = (df_feat['pitch_count_in_game'] / 100.0) * (vel_drop * 0.7 + spin_drop * 0.3)
-    
-    print("✅ 투수 체력 저하 피처 엔지니어링 완료!")
+
+    # ------------------------------------------------------------------
+    # 단계 1. 시간 순서 정렬
+    # cumcount 및 rolling 연산의 시간 순서 보장
+    # ------------------------------------------------------------------
+    df_feat = df_feat.sort_values(
+        by=['game_pk', 'pitcher', 'at_bat_number', 'pitch_number']
+    ).reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # 단계 2. 경기 내 누적 투구 수 산출 (누수 없음)
+    # pitch_count_in_game: 현재 투구 이전까지의 누적 수 + 1
+    # groupby 후 cumcount는 0-indexed → +1로 1구부터 시작
+    # ------------------------------------------------------------------
+    df_feat['pitch_count_in_game'] = (
+        df_feat.groupby(['game_pk', 'pitcher']).cumcount() + 1
+    )
+
+    # ------------------------------------------------------------------
+    # 단계 3. 시즌 베이스라인 병합 (경기 내 집계 방식 완전 대체)
+    # season_baseline_df를 (pitcher, game_year) 기준 LEFT JOIN
+    # base_speed, base_spin: 시즌 전체 평균 → 투구 이전 시점 확정값
+    # ------------------------------------------------------------------
+    df_feat = df_feat.merge(
+        season_baseline_df.rename(columns={
+            'season_avg_speed': 'base_speed',
+            'season_avg_spin':  'base_spin',
+        }),
+        on=['pitcher', 'game_year'],
+        how='left',
+    )
+
+    # ------------------------------------------------------------------
+    # 단계 4. Rolling 이동 평균 구속·회전수 산출 (핵심 누수 차단 장치)
+    # shift(1): 현재 투구 자신(row N)을 이동 평균 계산에서 배제
+    #           → row N의 rolling 평균 = rows (N-window)~(N-1)의 평균
+    # min_periods=1: 초반 투구(1~baseline_pitches-1구)에서도 가용 데이터로 계산
+    # ------------------------------------------------------------------
+    grp = df_feat.groupby(['game_pk', 'pitcher'])
+
+    rolling_speed = grp['release_speed'].transform(
+        lambda s: s.shift(1).rolling(window=baseline_pitches, min_periods=1).mean()
+    )
+    rolling_spin = grp['release_spin_rate'].transform(
+        lambda s: s.shift(1).rolling(window=baseline_pitches, min_periods=1).mean()
+    )
+
+    # ------------------------------------------------------------------
+    # 단계 5. 감쇠율 재정의 (누수 차단)
+    # 분자: 직전 투구까지의 rolling 이동 평균 (현재 투구 미포함)
+    # 분모: 시즌 전체 평균 구속/회전수 (정적 집계값)
+    # 결측 보정: 분모 0 또는 NaN → 1.0 대체 (정상 상태로 처리)
+    # ------------------------------------------------------------------
+    df_feat['velocity_decay_ratio'] = (rolling_speed / df_feat['base_speed']).fillna(1.0)
+    df_feat['spin_decay_ratio']     = (rolling_spin  / df_feat['base_spin']).fillna(1.0)
+
+    # base_speed, base_spin 자체 결측 처리 (신인 투수 등 데이터 미적재 케이스)
+    df_feat['base_speed'] = df_feat['base_speed'].fillna(0.0)
+    df_feat['base_spin']  = df_feat['base_spin'].fillna(0.0)
+
+    # ------------------------------------------------------------------
+    # 단계 6. stamina_index 재산출
+    # 산출식 구조 유지: (투구 수 / 100) * (구속 하락폭*0.7 + 회전수 하락폭*0.3)
+    # vel_drop, spin_drop: 음수 방지 클리핑 (구속/회전수가 오히려 상승한 경우 0 처리)
+    # ------------------------------------------------------------------
+    vel_drop  = np.maximum(1.0 - df_feat['velocity_decay_ratio'], 0)
+    spin_drop = np.maximum(1.0 - df_feat['spin_decay_ratio'],     0)
+
+    df_feat['stamina_index'] = (
+        (df_feat['pitch_count_in_game'] / 100.0) * (vel_drop * 0.7 + spin_drop * 0.3)
+    )
+
+    print("투수 체력 저하 피처 엔지니어링 완료")
     return df_feat
 
-def integrate_catcher_blocking(bat_tracking_df: pd.DataFrame, blocking_df: pd.DataFrame) -> pd.DataFrame:
+
+def integrate_catcher_blocking(
+    bat_tracking_df: pd.DataFrame,
+    blocking_df: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    [포수 블로킹 데이터 결합 및 위기 상황 파생 변수 생성]
-    - 목적: 위기 상황 시 포수 블로킹 능력에 따른 떨어지는 변화구 가중치 산출
-    - 방법: fielder_2(포수) 및 game_year 기준으로 블로킹 데이터 조인 후 지표 연산
+    [포수 블로킹 데이터 결합 및 위기 상황 파생 변수 생성 — 변경 없음]
+    - 변경 사항: 없음. is_risp, blocking_leverage_factor 모두 투구 이전 주자 상황 기반이므로 누수 없음.
+
+    Args:
+        bat_tracking_df: 타구 추적 DataFrame (stamina 피처 추가 후)
+        blocking_df:     포수 블로킹 마스터 DataFrame
+
+    Returns:
+        DataFrame: 원본 + [catcher_blocking_runs, is_risp, blocking_leverage_factor]
     """
-    print("🧤 포수 블로킹 도메인 로직 결합 시작...")
-    # - 원본 데이터 보호 (복사본 생성)
+    print("포수 블로킹 도메인 로직 결합 시작...")
+
     df_feat = bat_tracking_df.copy()
-    
-    # - 포수 데이터 결합: fielder_2 및 game_year 기준 레프트 조인
-    blocking_sub = blocking_df[['player_id', 'game_year', 'catcher_blocking_runs']].copy()
-    blocking_sub = blocking_sub.rename(columns={'player_id': 'fielder_2'})
+
+    # 포수 데이터 결합: fielder_2(포수) 및 game_year 기준 LEFT JOIN
+    blocking_sub = (
+        blocking_df[['player_id', 'game_year', 'catcher_blocking_runs']]
+        .copy()
+        .rename(columns={'player_id': 'fielder_2'})
+    )
     df_feat = df_feat.merge(blocking_sub, on=['fielder_2', 'game_year'], how='left')
-    
-    # - 결측치 처리: 블로킹 지표가 없는 포수는 평균치인 0으로 일괄 대체
+
+    # 결측치 처리: 블로킹 지표 없는 포수 → 리그 평균(0)으로 대체
     df_feat['catcher_blocking_runs'] = df_feat['catcher_blocking_runs'].fillna(0)
-    
-    # - 득점권 상황 파생 변수 생성: 2루(on_2b) 또는 3루(on_3b) 주자가 존재하면 득점권(1), 아니면 평시(0)로 식별
-    df_feat['is_risp'] = ((df_feat['on_2b'] != 0) | (df_feat['on_3b'] != 0)).astype(int)
-    
-    # - 블로킹 레버리지 팩터 산출: 득점권 상황에서 포수의 블로킹 런스에 비례해 가중치 부여
-    # - 특성: 포수 블로킹 능력이 좋을수록 양수 값 상승 -> 떨어지는 공(포크/커브 등) 구사 확률 증가 힌트
-    df_feat['blocking_leverage_factor'] = df_feat['is_risp'] * df_feat['catcher_blocking_runs'] * 0.1
-    
-    print("✅ 포수 블로킹 결합 완료!")
+
+    # 득점권 상황 파생 변수: 2루(on_2b) 또는 3루(on_3b) 주자 존재 시 1
+    df_feat['is_risp'] = (
+        (df_feat['on_2b'] != 0) | (df_feat['on_3b'] != 0)
+    ).astype(int)
+
+    # 블로킹 레버리지 팩터: RISP 상황에서 포수 블로킹 능력 가중치
+    df_feat['blocking_leverage_factor'] = (
+        df_feat['is_risp'] * df_feat['catcher_blocking_runs'] * 0.1
+    )
+
+    print("포수 블로킹 결합 완료")
     return df_feat
 
-def integrate_fielding_oaa(bat_tracking_df: pd.DataFrame, oaa_df: pd.DataFrame) -> pd.DataFrame:
+
+def integrate_fielding_oaa(
+    bat_tracking_df: pd.DataFrame,
+    oaa_df: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    [야수 OAA 데이터 결합 및 수비 리스크 파생 변수 생성]
-    - 목적: 당일 출전 야수진 수비력에 따른 탈삼진 유도 확률 가중치 산출
-    - 방법: 출전 중인 야수 7명의 OAA 합산 후 수비 리스크 인덱스 생성
+    [야수 OAA 데이터 결합 및 수비 리스크 파생 변수 생성 — 변경 없음]
+    - 변경 사항: 없음. team_oaa_total, fielding_risk_index 모두 시즌 집계 지표이므로 누수 없음.
+
+    Args:
+        bat_tracking_df: 포수 블로킹 피처 추가 후 DataFrame
+        oaa_df:          야수 OAA 마스터 DataFrame
+
+    Returns:
+        DataFrame: 원본 + [team_oaa_total, fielding_risk_index]
     """
-    print("🔄 야수 OAA 도메인 로직 결합 시작...")
-    # - 원본 데이터 보호 (복사본 생성)
+    print("야수 OAA 도메인 로직 결합 시작...")
+
     df_feat = bat_tracking_df.copy()
-    
-    # - 야수 OAA 딕셔너리 매핑 맵 생성 (빠른 연산을 위함)
-    # - player_id와 game_year를 복합키 인덱스로 설정하여 빠른 벡터화 매핑 준비
+
+    # 야수 OAA 딕셔너리 매핑 (player_id, game_year) 복합키 인덱스
     oaa_series = oaa_df.set_index(['player_id', 'game_year'])['outs_above_average']
-    
-    # - 야수진 ID 컬럼 리스트 (1루수부터 우익수까지 총 7명)
-    fielder_cols = ['fielder_3', 'fielder_4', 'fielder_5', 'fielder_6', 'fielder_7', 'fielder_8', 'fielder_9']
-    
-    # - 당일 출전 야수진 OAA 합산 연산
+
+    # 야수진 ID 컬럼 (1루수~우익수, 총 7명)
+    fielder_cols = ['fielder_3', 'fielder_4', 'fielder_5',
+                    'fielder_6', 'fielder_7', 'fielder_8', 'fielder_9']
+
+    # 출전 야수진 OAA 합산
     df_feat['team_oaa_total'] = 0.0
     for col in fielder_cols:
-        # - 각 수비수 위치별로 OAA 점수 매핑 (결측치는 0으로 처리하여 단순 합산)
         idx = pd.MultiIndex.from_arrays([df_feat[col], df_feat['game_year']])
         df_feat['team_oaa_total'] += idx.map(oaa_series).fillna(0)
-        
-    # - 수비 가변 가중치 생성: 팀 OAA가 낮을수록 탈삼진 리스크 인덱스 증가
-    # - 특성: 팀 OAA 총합이 마이너스(수비 불안)일수록 탈삼진을 잡아야 하므로 가중치 상승
+
+    # 수비 리스크 인덱스: 팀 OAA 마이너스일수록 탈삼진 유도 필요성 증가
     df_feat['fielding_risk_index'] = np.maximum(-df_feat['team_oaa_total'] * 0.05, 0)
-    
-    print("✅ 야수 OAA 결합 완료!")
+
+    print("야수 OAA 결합 완료")
     return df_feat
 
+
 if __name__ == "__main__":
-    # 검증: 정제 데이터 로드 및 적용
-    print("로컬 검증 데이터 로드 중...")
-    datasets = get_clean_datasets()
-    bat_df = datasets['bat_tracking']
+    from ml_engine.datasets import get_clean_datasets
+
+    print("로컬 검증: 전체 피처 엔지니어링 파이프라인 실행 중...")
+    datasets  = get_clean_datasets()
+    bat_df    = datasets['bat_tracking']
     blocking_df = datasets['blocking']
-    oaa_df = datasets['oaa']
-    
-    # 1. 투수 체력 저하 피처 생성
-    feat_df = calculate_pitcher_stamina_decay(bat_df, baseline_pitches=15)
-    
-    # 2. 포수 블로킹 결합
+    oaa_df    = datasets['oaa']
+
+    # 시즌 베이스라인 사전 산출 (샘플링 전 전체 데이터 기준)
+    season_baseline = build_season_baseline(bat_df)
+
+    # 파이프라인 체인
+    feat_df = calculate_pitcher_stamina_decay(bat_df, season_baseline, baseline_pitches=15)
     feat_df = integrate_catcher_blocking(feat_df, blocking_df)
-    
-    # 3. 야수 OAA 결합
     feat_df = integrate_fielding_oaa(feat_df, oaa_df)
-    
-    # 파생 변수 확인 (투구 수 80구 초과 및 득점권 상황 샘플)
-    print("\n🔍 [검증] 전체 파이프라인 결합 완료. 최종 파생 변수 확인 (상위 10개 행):")
+
+    # 검증 출력: 득점권 상황 + 누적 투구 수 60구 초과 샘플
     cols_to_show = [
-        'game_pk', 'pitcher', 'pitch_count_in_game', 'stamina_index',
-        'is_risp', 'blocking_leverage_factor', 
-        'team_oaa_total', 'fielding_risk_index'
+        'game_pk', 'pitcher', 'pitch_count_in_game',
+        'base_speed', 'velocity_decay_ratio', 'stamina_index',
+        'is_risp', 'blocking_leverage_factor',
+        'team_oaa_total', 'fielding_risk_index',
     ]
-    
-    # 득점권 상황 및 투구 수가 어느 정도 누적된 행 필터링
-    sample_view = feat_df[(feat_df['pitch_count_in_game'] > 60) & (feat_df['is_risp'] == 1)][cols_to_show].head(10)
-    if sample_view.empty:
-        sample_view = feat_df[cols_to_show].head(10)
-        
-    print(sample_view)
-    print(f"\n최종 DataFrame 형태: {feat_df.shape} (기존 118개 컬럼에서 추가 완료)")
+    sample = feat_df[
+        (feat_df['pitch_count_in_game'] > 60) & (feat_df['is_risp'] == 1)
+    ][cols_to_show].head(10)
+
+    if sample.empty:
+        sample = feat_df[cols_to_show].head(10)
+
+    print("\n[검증] 최종 파생 변수 확인 (상위 10개 행):")
+    print(sample)
+    print(f"\nDataFrame 형태: {feat_df.shape}")
+    print(f"base_speed 결측 비율: {feat_df['base_speed'].isna().mean():.4f}")
+    print(f"velocity_decay_ratio 결측 비율: {feat_df['velocity_decay_ratio'].isna().mean():.4f}")
