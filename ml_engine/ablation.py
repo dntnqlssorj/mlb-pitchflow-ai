@@ -16,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")  # GUI 없는 환경 대응
 import matplotlib.pyplot as plt
 from pathlib import Path
+import platform
 
 warnings.filterwarnings("ignore")
 
@@ -26,13 +27,17 @@ from sklearn.preprocessing import LabelEncoder
 
 from ml_engine.datasets import get_clean_datasets
 from ml_engine.feature_engineering import (
+    build_season_baseline,
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
     integrate_fielding_oaa,
 )
 
-# 한글 폰트 설정 (Windows)
-plt.rcParams["font.family"] = "Malgun Gothic"
+# 한글 폰트 설정 (OS 대응)
+if platform.system() == "Darwin":
+    plt.rcParams["font.family"] = "AppleGothic"
+elif platform.system() == "Windows":
+    plt.rcParams["font.family"] = "Malgun Gothic"
 plt.rcParams["axes.unicode_minus"] = False
 
 # ── 베이스라인 피처 (투구 전 전체) ─────────────────────────────────────────
@@ -92,10 +97,15 @@ def load_data(sampling_rate: float) -> tuple:
     datasets = get_clean_datasets()
     bat_df = datasets["bat_tracking"]
 
+    # 1. 시즌 베이스라인 사전 산출 (샘플링 전 전체 데이터 기준)
+    season_baseline = build_season_baseline(bat_df)
+
+    # 2. 샘플링 적용
     if sampling_rate < 1.0:
         bat_df = bat_df.sample(frac=sampling_rate, random_state=42).copy()
 
-    df = calculate_pitcher_stamina_decay(bat_df, baseline_pitches=15)
+    # 3. 피처 엔지니어링 수행 (새로운 시그니처 반영)
+    df = calculate_pitcher_stamina_decay(bat_df, season_baseline, baseline_pitches=15)
     df = integrate_catcher_blocking(df, datasets["blocking"])
     df = integrate_fielding_oaa(df, datasets["oaa"])
     df = df.dropna(subset=["pitch_type"])
