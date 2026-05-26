@@ -7,6 +7,8 @@
 #   - 응답에 enrichment_latency_ms, enrichment_sources 추가
 # ==============================================================================
 
+import time
+import numpy as np
 import pandas as pd
 import joblib
 from pathlib import Path
@@ -15,6 +17,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from backend.services.enrichment import enrich_pitch_context
+from ml_engine.ensemble import predict as ensemble_predict
 
 router = APIRouter()
 
@@ -24,6 +27,7 @@ MODEL_MAP = {
     "xgboost":       "xgboost_pitch_model.pkl",
     "random_forest": "random_forest_pitch_model.pkl",
     "lightgbm":      "lightgbm_pitch_model.pkl",
+    # ensemble: ml_engine/ensemble.py 경유 (별도 pkl 없음)
 }
 
 
@@ -158,7 +162,7 @@ def predict_pitch(
     input_data: PitchInferenceInput,
     model_type: str = Query(
         default="xgboost",
-        description="사용할 모델 (xgboost / random_forest / lightgbm)",
+        description="사용할 모델 (xgboost / random_forest / lightgbm / ensemble)",
     ),
 ):
     """
@@ -173,21 +177,13 @@ def predict_pitch(
         → 라벨 디코딩
         → JSON 반환
     """
-    # --- 모델 및 인코더 로드 ---
-    model         = _load_model(model_type)
-    label_encoder = _load_label_encoder()
-    feature_names = list(model.feature_names_in_)
-
-    # --- stand 인코딩: R=0, L=1 (학습 파이프라인과 동일) ---
+    # --- Enrichment 공통 처리 (ensemble 포함 모든 모델) ---
     stand_encoded = 0 if input_data.stand.upper() != "L" else 1
-
-    # --- Supabase Enrichment ---
     fielder_ids = [
         input_data.fielder_3, input_data.fielder_4, input_data.fielder_5,
         input_data.fielder_6, input_data.fielder_7, input_data.fielder_8,
         input_data.fielder_9,
     ]
-
     enriched = enrich_pitch_context(
         pitcher_id=input_data.pitcher,
         batter_id=input_data.batter,
@@ -199,12 +195,9 @@ def predict_pitch(
         on_3b=input_data.on_3b,
         pitch_count_override=input_data.pitch_count_override,
     )
-
     enrichment_latency_ms = enriched.pop("enrichment_latency_ms")
     enrichment_sources    = enriched.pop("enrichment_sources")
 
-    # --- 입력 딕셔너리 병합 (API 입력 + enriched) ---
-    # enriched 값이 API 입력의 None 필드를 덮어쓰도록 enriched를 후순위에 배치
     api_dict = {
         "pitcher":    input_data.pitcher,
         "batter":     input_data.batter,
@@ -234,10 +227,37 @@ def predict_pitch(
         "age_pit": input_data.age_pit or 0,
         "age_bat": input_data.age_bat or 0,
     }
-
     merged = {**api_dict, **enriched}
 
-    # --- 피처 벡터 구성 및 예측 ---
+    # ------------------------------------------------------------------
+    # 앙상블 분기 — XGBoost + Bi-LSTM Soft Blending
+    # ------------------------------------------------------------------
+    if model_type == "ensemble":
+        # XGBoost feature_names 기준으로 피처 벡터 구성
+        from ml_engine.ensemble import load_ensemble_components
+        c = load_ensemble_components()
+        X_df = _build_feature_vector(merged, c['feat_names'])
+        X_2d = X_df.values.astype(np.float32)
+
+        result = ensemble_predict(X_2d)
+        return {
+            "model_used":           "ensemble",
+            "predicted_pitch":      result['predicted_pitch'],
+            "confidence":           result['confidence'],
+            "pitch_probabilities":  result['pitch_probabilities'],
+            "xgb_top":             result['xgb_top'],
+            "lstm_top":            result['lstm_top'],
+            "ensemble_weights":    result['weights'],
+            "enrichment_latency_ms": enrichment_latency_ms,
+            "enrichment_sources":  enrichment_sources,
+        }
+
+    # --- 단일 모델 분기 (xgboost / random_forest / lightgbm) ---
+    model         = _load_model(model_type)
+    label_encoder = _load_label_encoder()
+    feature_names = list(model.feature_names_in_)
+
+    # --- 피처 벡터 구성 및 예측 (단일 모델) ---
     X = _build_feature_vector(merged, feature_names)
 
     probabilities = model.predict_proba(X)[0]

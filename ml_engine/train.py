@@ -26,6 +26,10 @@ from ml_engine.feature_engineering import (
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
     integrate_fielding_oaa,
+    add_pitch_sequence_features,
+    add_pitcher_repertoire_features,
+    add_situational_features,
+    add_pitcher_situation_features,
 )
 from ml_engine.config import (
     ALLOWED_FEATURES,
@@ -38,7 +42,7 @@ from ml_engine.config import (
 )
 
 
-def prepare_training_data(sampling_rate: float = 0.1) -> tuple:
+def prepare_training_data(sampling_rate: float = 0.1, return_df: bool = False) -> tuple:
     """
     [학습 데이터 분할 및 준비 — 누수 제거 버전]
     - 목적: Target Leakage 없는 X(피처), y(타겟) 데이터셋 전처리
@@ -83,6 +87,10 @@ def prepare_training_data(sampling_rate: float = 0.1) -> tuple:
     )
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
+    df = add_pitch_sequence_features(df)
+    df = add_pitcher_repertoire_features(df)
+    df = add_situational_features(df)
+    df = add_pitcher_situation_features(df)
 
     # ------------------------------------------------------------------
     # 단계 5. 타겟 결측치 제거
@@ -90,12 +98,40 @@ def prepare_training_data(sampling_rate: float = 0.1) -> tuple:
     df = df.dropna(subset=[LABEL_COL])
 
     # ------------------------------------------------------------------
-    # 단계 6. 희귀 구종 필터링 (샘플 수 MIN_PITCH_TYPE_COUNT 미만 제외)
+    # 단계 6. 희귀 구종 필터링 및 Class Merging 적용
     # ------------------------------------------------------------------
-    valid_types = df[LABEL_COL].value_counts()
-    valid_types = valid_types[valid_types >= MIN_PITCH_TYPE_COUNT].index
-    df = df[df[LABEL_COL].isin(valid_types)]
-    print(f"유효 구종 수: {len(valid_types)}개 ({list(valid_types)})")
+    # - 구종별 행 수 집계 및 출력
+    pitch_counts = df['pitch_type'].value_counts()
+    print("\n[구종별 행 수 집계]")
+    for pitch, count in pitch_counts.items():
+        print(f"  {pitch}: {count}행")
+
+    # - 데이터 기반 조건부 Class Merging
+    # - 임계값 100행 미만 구종 → 'OT' 클래스로 통합
+    RARE_THRESHOLD = 100
+    rare_pitches = pitch_counts[pitch_counts < RARE_THRESHOLD].index.tolist()
+
+    if rare_pitches:
+        print(f"\n[OT 편입 대상] 임계값 {RARE_THRESHOLD}행 미만 구종: {rare_pitches}")
+        df['pitch_type'] = df['pitch_type'].apply(
+            lambda x: 'OT' if x in rare_pitches else x
+        )
+        print(f"[OT 편입 완료] 편입 후 구종 분포:")
+        for pitch, count in df['pitch_type'].value_counts().items():
+            print(f"  {pitch}: {count}행")
+    else:
+        print("\n[Class Merging 불필요] 100행 미만 구종 없음. 전체 클래스 유지.")
+
+    # - 학습 데이터(2024)에 존재하지 않고 검증 데이터(2025)에만 존재하는 희귀 구종 제거 (XGBoost ValueError 방지)
+    train_classes = df[df['game_year'] == TRAIN_YEAR]['pitch_type'].unique()
+    test_only_classes = [c for c in df['pitch_type'].unique() if c not in train_classes]
+
+    if test_only_classes:
+        print(f"\n[학습 데이터 미존재 구종 제거] {test_only_classes}")
+        df = df[~df['pitch_type'].isin(test_only_classes)].copy()
+
+    final_class_count = df['pitch_type'].nunique()
+    print(f"\n[최종 클래스 수] {final_class_count}개")
 
     # ------------------------------------------------------------------
     # 단계 7. 타겟 라벨 인코딩
@@ -166,6 +202,8 @@ def prepare_training_data(sampling_rate: float = 0.1) -> tuple:
     print(f"  학습 구종 분포:\n{pd.Series(y_train).value_counts().to_string()}")
     print(f"  검증 구종 분포:\n{pd.Series(y_test).value_counts().to_string()}")
 
+    if return_df:
+        return X_train, X_test, y_train, y_test, available_features, le, df
     return X_train, X_test, y_train, y_test, available_features, le
 
 
@@ -260,8 +298,13 @@ def pack_model(model, label_encoder, model_name: str = 'xgboost_pitch_model'):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--sampling', type=float, default=1.0, help='데이터 샘플링 비율 (기본값: 1.0)')
+    args = parser.parse_args()
+
     X_train, X_test, y_train, y_test, feat_names, label_encoder = prepare_training_data(
-        sampling_rate=0.1
+        sampling_rate=args.sampling
     )
     results_table, best_model = evaluate_multiple_models(
         X_train, X_test, y_train, y_test, feat_names

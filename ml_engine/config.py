@@ -29,8 +29,7 @@ MIN_PITCH_TYPE_COUNT: int  = 10            # 희귀 구종 필터 하한
 #   [검토 5] pitcher_days_until_next_game, batter_days_until_next_game → 드롭
 # ------------------------------------------------------------------------------
 ALLOWED_FEATURES: List[str] = [
-    # 그룹 A: 경기 상황 (pre-pitch) — 9개
-    # home_win_exp, bat_win_exp 제거 (검토 1)
+    # 그룹 A: 경기 상황 (pre-pitch)
     'balls',
     'strikes',
     'outs_when_up',
@@ -40,28 +39,23 @@ ALLOWED_FEATURES: List[str] = [
     'on_3b',
     'home_score_diff',
     'bat_score_diff',
+    'count_situation',
+    'matchup_type',
 
-    # 그룹 B: 투수 이력 — 5개
-    # pitcher_days_until_next_game 제거 (검토 5)
-    # age_pit_legacy 제거 (검토 3)
+    # 그룹 B: 투수 이력
     'pitcher',
     'game_year',
     'n_thruorder_pitcher',
     'pitcher_days_since_prev_game',
     'age_pit',
 
-    # 그룹 C: 타자 이력 — 5개
-    # stand 추가 (검토 4), batter_days_until_next_game 제거 (검토 5)
+    # 그룹 C: 타자 이력
     'batter',
-    'stand',                            # 반드시 R=0, L=1 수치 인코딩 후 선택
-    'n_priorpa_thisgame_player_at_bat', # 허용 확정 (검토 2)
-    'batter_days_since_prev_game',
+    'n_priorpa_thisgame_player_at_bat',
     'age_bat',
+    'stand',
 
-    # 그룹 D: 투수 체력 파생 (재설계 후 누수 없는 버전) — 6개
-    # velocity_decay_ratio: shift(1) rolling 평균 / 시즌 집계 베이스라인
-    # spin_decay_ratio:     동일 패턴
-    # stamina_index:        위 두 비율 기반 재산출 (현재 투구 데이터 배제)
+    # 그룹 D: 투수 체력 파생
     'pitch_count_in_game',
     'base_speed',
     'base_spin',
@@ -69,24 +63,40 @@ ALLOWED_FEATURES: List[str] = [
     'spin_decay_ratio',
     'stamina_index',
 
-    # 그룹 E: 포수 도메인 — 4개
+    # 그룹 E: 포수 식별자 (블로킹 파생 전면 제거, ID만 유지)
     'fielder_2',
-    'catcher_blocking_runs',
-    'is_risp',
-    'blocking_leverage_factor',
 
-    # 그룹 F: 야수 OAA 도메인 — 9개
-    'fielder_3',
-    'fielder_4',
-    'fielder_5',
-    'fielder_6',
-    'fielder_7',
-    'fielder_8',
-    'fielder_9',
-    'team_oaa_total',
-    'fielding_risk_index',
+    # 그룹 F: Pitch Sequence (신규)
+    'prev_pitch_1',
+    'prev_pitch_2',
+    'prev_pitch_3',
+
+    # 그룹 G: Pitcher 구종 레퍼토리 비율 (신규)
+    'pitcher_ff_pct',
+    'pitcher_sl_pct',
+    'pitcher_ch_pct',
+    'pitcher_si_pct',    # 신규
+    'pitcher_cu_pct',    # 신규
+    'pitcher_fc_pct',    # 신규
+
+    # 그룹 I: 투수 카운트/매치업별 구종 비율 (신규 30개)
+    # 카운트 ahead (투수 유리)
+    'pitcher_ff_pct_ahead', 'pitcher_sl_pct_ahead', 'pitcher_ch_pct_ahead',
+    'pitcher_si_pct_ahead', 'pitcher_cu_pct_ahead', 'pitcher_fc_pct_ahead',
+    # 카운트 behind (타자 유리)
+    'pitcher_ff_pct_behind', 'pitcher_sl_pct_behind', 'pitcher_ch_pct_behind',
+    'pitcher_si_pct_behind', 'pitcher_cu_pct_behind', 'pitcher_fc_pct_behind',
+    # 카운트 even (동등)
+    'pitcher_ff_pct_even', 'pitcher_sl_pct_even', 'pitcher_ch_pct_even',
+    'pitcher_si_pct_even', 'pitcher_cu_pct_even', 'pitcher_fc_pct_even',
+    # vs 좌타
+    'pitcher_ff_pct_vsL', 'pitcher_sl_pct_vsL', 'pitcher_ch_pct_vsL',
+    'pitcher_si_pct_vsL', 'pitcher_cu_pct_vsL', 'pitcher_fc_pct_vsL',
+    # vs 우타
+    'pitcher_ff_pct_vsR', 'pitcher_sl_pct_vsR', 'pitcher_ch_pct_vsR',
+    'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
 ]
-# ALLOWED_FEATURES 총 38개
+# ALLOWED_FEATURES 총 68개
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
@@ -161,8 +171,6 @@ LEAKAGE_FEATURES: List[str] = [
     'zone',
     'hit_location',
     # 검토 결정 추가 드롭 (2026-05-21)
-    'home_win_exp',                    # 검토 1
-    'bat_win_exp',                     # 검토 1
     'age_pit_legacy',                  # 검토 3
     'pitcher_days_until_next_game',    # 검토 5
     'batter_days_until_next_game',     # 검토 5

@@ -147,6 +147,23 @@ def calculate_pitcher_stamina_decay(
     return df_feat
 
 
+def add_situational_features(df):
+    """
+    [상황별 파생 변수 추가]
+    - count_situation: 3*balls + strikes (볼카운트 상황을 단일 수치로 인코딩)
+    - matchup_type: 타자(stand)와 투수(p_throws)의 좌우 매치업 (LL=0, LR=1, RL=2, RR=3, 그외 4)
+    """
+    df['count_situation'] = df['balls'] * 3 + df['strikes']
+    if 'p_throws' in df.columns:
+        matchup_map = {'LL':0,'LR':1,'RL':2,'RR':3}
+        df['matchup_type'] = (
+            df['stand'].astype(str) + df['p_throws'].astype(str)
+        ).map(matchup_map).fillna(4).astype(int)
+    else:
+        df['matchup_type'] = 4
+    return df
+
+
 def integrate_catcher_blocking(
     bat_tracking_df: pd.DataFrame,
     blocking_df: pd.DataFrame,
@@ -266,3 +283,179 @@ if __name__ == "__main__":
     print(f"\nDataFrame 형태: {feat_df.shape}")
     print(f"base_speed 결측 비율: {feat_df['base_speed'].isna().mean():.4f}")
     print(f"velocity_decay_ratio 결측 비율: {feat_df['velocity_decay_ratio'].isna().mean():.4f}")
+
+
+def add_pitch_sequence_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    [Pitch Sequence 정형 피처 생성]
+    - 목적: 직전 1~3구 구종을 정수 인코딩하여 시퀀스 정보 주입
+    - 누수 차단: shift(N) 적용으로 현재 투구 자신 배제
+    - 결측 처리: 경기 첫 구 등 이전 투구 없는 케이스 → -1 패딩
+    """
+    print("Pitch Sequence 피처 엔지니어링 시작...")
+
+    # - 시간 순 정렬: 시퀀스 연산의 순서 보장
+    df = df.sort_values(
+        ['game_pk', 'pitcher', 'at_bat_number', 'pitch_number']
+    ).copy()
+
+    # - 구종 Label Encoding: 문자열 구종 → 정수 (OT 포함 전체 클래스)
+    from sklearn.preprocessing import LabelEncoder
+    seq_le = LabelEncoder()
+    df['pitch_type_encoded'] = seq_le.fit_transform(
+        df['pitch_type'].astype(str)
+    )
+
+    # - Shift 연산: 현재 투구 배제 후 직전 N구 구종 추출
+    grp = df.groupby(['game_pk', 'pitcher'])['pitch_type_encoded']
+    df['prev_pitch_1'] = grp.shift(1).fillna(-1).astype(int)
+    df['prev_pitch_2'] = grp.shift(2).fillna(-1).astype(int)
+    df['prev_pitch_3'] = grp.shift(3).fillna(-1).astype(int)
+
+    print(f"  prev_pitch_1 결측(-1) 비율: "
+          f"{(df['prev_pitch_1'] == -1).mean():.2%}")
+    print("Pitch Sequence 피처 엔지니어링 완료")
+
+    return df
+
+
+def add_pitcher_repertoire_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    [투수 구종 레퍼토리 비율 피처 생성]
+    - 목적: pitcher ID 암기 구조 대체 — 시즌 구종 비율을 명시적 피처로 제공
+    - 계산 기준: 동일 투수의 동일 game_year 전체 투구 대상 비율 산출
+    - 누수 여부: 시즌 집계 통계 (사전 확정값) → 누수 없음
+    """
+    print("Pitcher Repertoire 피처 엔지니어링 시작...")
+
+    # - 투수 × 시즌 × 구종 비율 산출
+    repertoire = (
+        df.groupby(['pitcher', 'game_year'])['pitch_type']
+        .value_counts(normalize=True)
+        .unstack(fill_value=0.0)
+        .reset_index()
+    )
+
+    TARGET_PITCHES = ['FF', 'SL', 'CH', 'SI', 'CU', 'FC']
+    for col in TARGET_PITCHES:
+        if col not in repertoire.columns:
+            repertoire[col] = 0.0
+
+    RENAME_MAP = {
+        'FF': 'pitcher_ff_pct',
+        'SL': 'pitcher_sl_pct',
+        'CH': 'pitcher_ch_pct',
+        'SI': 'pitcher_si_pct',
+        'CU': 'pitcher_cu_pct',
+        'FC': 'pitcher_fc_pct',
+    }
+    repertoire = repertoire[['pitcher', 'game_year'] + TARGET_PITCHES].rename(
+        columns=RENAME_MAP
+    )
+
+    # - 원본 df에 LEFT JOIN
+    df = df.merge(repertoire, on=['pitcher', 'game_year'], how='left')
+
+    PCT_COLS = list(RENAME_MAP.values())
+    for col in PCT_COLS:
+        league_avg = df[col].mean() if col in df.columns else 0.0
+        df[col] = df[col].fillna(league_avg)
+
+    print(f"  pitcher_ff_pct 평균: {df['pitcher_ff_pct'].mean():.4f}")
+    print(f"  pitcher_sl_pct 평균: {df['pitcher_sl_pct'].mean():.4f}")
+    print(f"  pitcher_ch_pct 평균: {df['pitcher_ch_pct'].mean():.4f}")
+    print(f"  pitcher_si_pct 평균: {df['pitcher_si_pct'].mean():.4f}")
+    print(f"  pitcher_cu_pct 평균: {df['pitcher_cu_pct'].mean():.4f}")
+    print(f"  pitcher_fc_pct 평균: {df['pitcher_fc_pct'].mean():.4f}")
+    print("Pitcher Repertoire 피처 엔지니어링 완료")
+
+    return df
+
+
+def add_pitcher_situation_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    [투수별 카운트/매치업 상황별 구종 비율 피처 생성]
+    - 목적: 시즌 전체 비율(pitcher_ff_pct)의 한계 보완
+    - 투수는 카운트/매치업 상황에 따라 구종 선택이 완전히 다름
+    - 누수 여부: 시즌 집계 통계 (사전 확정값) → 누수 없음
+    """
+    print("Pitcher Situation 피처 엔지니어링 시작...")
+
+    # 카운트 상황 분류
+    # ahead: 투수 유리 (0-1, 0-2, 1-2)
+    # behind: 타자 유리 (1-0, 2-0, 3-0, 2-1, 3-1)
+    # even: 동등 (0-0, 1-1, 2-2, 3-2)
+    def get_count_situation(row):
+        b, s = row['balls'], row['strikes']
+        if (b == 0 and s >= 1) or (b == 1 and s == 2):
+            return 'ahead'
+        elif b >= s + 1:
+            return 'behind'
+        else:
+            return 'even'
+
+    df['_count_sit'] = df.apply(get_count_situation, axis=1)
+
+    # 상황별 구종 비율 집계
+    TARGET_PITCHES = ['FF', 'SL', 'CH', 'SI', 'CU', 'FC']
+    situations = ['ahead', 'behind', 'even']
+    matchups = ['L', 'R']
+
+    # 카운트 상황별 구종 비율
+    for sit in situations:
+        mask = df['_count_sit'] == sit
+        sit_df = df[mask]
+        sit_pct = (
+            sit_df.groupby(['pitcher', 'game_year'])['pitch_type']
+            .value_counts(normalize=True)
+            .unstack(fill_value=0.0)
+            .reset_index()
+        )
+        for pt in TARGET_PITCHES:
+            col_name = f'pitcher_{pt.lower()}_pct_{sit}'
+            if pt not in sit_pct.columns:
+                sit_pct[pt] = 0.0
+            sit_pct = sit_pct.rename(columns={pt: col_name})
+            df = df.merge(
+                sit_pct[['pitcher', 'game_year', col_name]],
+                on=['pitcher', 'game_year'],
+                how='left'
+            )
+            league_avg = df[col_name].mean()
+            df[col_name] = df[col_name].fillna(league_avg)
+
+    # 매치업별 구종 비율 (vs 좌타 / vs 우타)
+    for hand in matchups:
+        if hand == 'L':
+            mask = (df['stand'] == 'L') | (df['stand'] == 1)
+        else:
+            mask = (df['stand'] == 'R') | (df['stand'] == 0)
+        hand_df = df[mask]
+        hand_pct = (
+            hand_df.groupby(['pitcher', 'game_year'])['pitch_type']
+            .value_counts(normalize=True)
+            .unstack(fill_value=0.0)
+            .reset_index()
+        )
+        for pt in TARGET_PITCHES:
+            col_name = f'pitcher_{pt.lower()}_pct_vs{hand}'
+            if pt not in hand_pct.columns:
+                hand_pct[pt] = 0.0
+            hand_pct = hand_pct.rename(columns={pt: col_name})
+            df = df.merge(
+                hand_pct[['pitcher', 'game_year', col_name]],
+                on=['pitcher', 'game_year'],
+                how='left'
+            )
+            league_avg = df[col_name].mean()
+            df[col_name] = df[col_name].fillna(league_avg)
+
+    # 임시 컬럼 제거
+    df = df.drop(columns=['_count_sit'])
+
+    n_new = len(situations) * len(TARGET_PITCHES) + len(matchups) * len(TARGET_PITCHES)
+    print(f"  신규 피처 수: {n_new}개")
+    print(f"  카운트 상황별: {len(situations) * len(TARGET_PITCHES)}개")
+    print(f"  매치업별: {len(matchups) * len(TARGET_PITCHES)}개")
+    print("Pitcher Situation 피처 엔지니어링 완료")
+    return df
