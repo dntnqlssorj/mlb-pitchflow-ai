@@ -15,9 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional
-
 from backend.services.enrichment import enrich_pitch_context
-from ml_engine.ensemble import predict as ensemble_predict
 
 router = APIRouter()
 
@@ -27,6 +25,7 @@ MODEL_MAP = {
     "xgboost":       "xgboost_pitch_model.pkl",
     "random_forest": "random_forest_pitch_model.pkl",
     "lightgbm":      "lightgbm_pitch_model.pkl",
+    "catboost":      "catboost_pitch_model.pkl",
     # ensemble: ml_engine/ensemble.py 경유 (별도 pkl 없음)
 }
 
@@ -162,7 +161,7 @@ def predict_pitch(
     input_data: PitchInferenceInput,
     model_type: str = Query(
         default="xgboost",
-        description="사용할 모델 (xgboost / random_forest / lightgbm / ensemble)",
+        description="사용할 모델 (xgboost / random_forest / lightgbm / catboost / stacking / ensemble)",
     ),
 ):
     """
@@ -230,11 +229,69 @@ def predict_pitch(
     merged = {**api_dict, **enriched}
 
     # ------------------------------------------------------------------
+    # 스태킹 분기 — XGBoost + LightGBM + CatBoost Level-1 Stacking
+    # ------------------------------------------------------------------
+    if model_type == "stacking":
+        meta_path = MODEL_DIR / 'stacking_meta_learner.pkl'
+        paths_path = MODEL_DIR / 'stacking_base_model_paths.pkl'
+        
+        if not meta_path.exists() or not paths_path.exists():
+            raise HTTPException(
+                status_code=503,
+                detail="스태킹 메타러너 모델 또는 경로 정의 파일이 존재하지 않습니다."
+            )
+            
+        meta_learner = joblib.load(meta_path)
+        base_paths = joblib.load(paths_path)
+        
+        # 기저 모델 로드
+        best_xgb = joblib.load(MODEL_DIR / Path(base_paths['xgb']).name)
+        best_lgb = joblib.load(MODEL_DIR / Path(base_paths['lgb']).name)
+        best_cat = joblib.load(MODEL_DIR / Path(base_paths['cat']).name)
+        
+        # 피처 벡터 구성 및 예측
+        xgb_feats = list(best_xgb.feature_names_) if hasattr(best_xgb, 'feature_names_') else list(best_xgb.feature_names_in_)
+        lgb_feats = list(best_lgb.feature_names_) if hasattr(best_lgb, 'feature_names_') else list(best_lgb.feature_names_in_)
+        cat_feats = list(best_cat.feature_names_) if hasattr(best_cat, 'feature_names_') else list(best_cat.feature_names_in_)
+        
+        X_xgb = _build_feature_vector(merged, xgb_feats)
+        X_lgb = _build_feature_vector(merged, lgb_feats)
+        X_cat = _build_feature_vector(merged, cat_feats)
+        
+        prob_xgb = best_xgb.predict_proba(X_xgb)[0]
+        prob_lgb = best_lgb.predict_proba(X_lgb)[0]
+        prob_cat = best_cat.predict_proba(X_cat)[0]
+        
+        X_meta = np.hstack([prob_xgb, prob_lgb, prob_cat]).reshape(1, -1)
+        
+        meta_probs = meta_learner.predict_proba(X_meta)[0]
+        label_encoder = _load_label_encoder()
+        pitch_classes = label_encoder.classes_
+        
+        prob_dict = {
+            str(pitch_classes[i]): round(float(p), 4)
+            for i, p in enumerate(meta_probs)
+        }
+        
+        sorted_probs = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
+        predicted_pitch = max(prob_dict, key=prob_dict.get)
+        
+        return {
+            "model_used":           "stacking",
+            "predicted_pitch":      predicted_pitch,
+            "confidence":           sorted_probs[predicted_pitch],
+            "pitch_probabilities":  sorted_probs,
+            "enrichment_latency_ms": enrichment_latency_ms,
+            "enrichment_sources":   enrichment_sources,
+        }
+
+    # ------------------------------------------------------------------
     # 앙상블 분기 — XGBoost + Bi-LSTM Soft Blending
     # ------------------------------------------------------------------
     if model_type == "ensemble":
         # XGBoost feature_names 기준으로 피처 벡터 구성
         from ml_engine.ensemble import load_ensemble_components
+        from ml_engine.ensemble import predict as ensemble_predict
         c = load_ensemble_components()
         X_df = _build_feature_vector(merged, c['feat_names'])
         X_2d = X_df.values.astype(np.float32)
@@ -255,7 +312,7 @@ def predict_pitch(
     # --- 단일 모델 분기 (xgboost / random_forest / lightgbm) ---
     model         = _load_model(model_type)
     label_encoder = _load_label_encoder()
-    feature_names = list(model.feature_names_in_)
+    feature_names = list(model.feature_names_) if hasattr(model, 'feature_names_') else list(model.feature_names_in_)
 
     # --- 피처 벡터 구성 및 예측 (단일 모델) ---
     X = _build_feature_vector(merged, feature_names)
