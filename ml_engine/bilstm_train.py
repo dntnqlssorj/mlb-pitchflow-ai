@@ -164,5 +164,5 @@ def train_bilstm(sampling_rate: float = 0.1):
 
 
 if __name__ == '__main__':
-    # Python 3.11 MPS 안정성 확인 완료 -> 100% 전체 학습
-    train_bilstm(sampling_rate=1.0)
+    # - 빠른 검증 및 차원 일치를 위해 10% 샘플링 비율로 고속 학습 실행
+    train_bilstm(sampling_rate=0.1)

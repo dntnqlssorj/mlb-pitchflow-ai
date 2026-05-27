@@ -218,7 +218,41 @@ CREATE TABLE statcast_bat_tracking (
     attack_direction DOUBLE PRECISION,
     swing_path_tilt DOUBLE PRECISION,
     intercept_ball_minus_batter_pos_x_inches DOUBLE PRECISION,
-    intercept_ball_minus_batter_pos_y_inches DOUBLE PRECISION
+    intercept_ball_minus_batter_pos_y_inches DOUBLE PRECISION,
+    
+    -- [2026-05-21 추가된 신규 고급 피처 및 파생 변수 컬럼군]
+    count_situation BIGINT,
+    matchup_type BIGINT,
+    base_speed DOUBLE PRECISION,
+    base_spin DOUBLE PRECISION,
+    velocity_decay_ratio DOUBLE PRECISION,
+    spin_decay_ratio DOUBLE PRECISION,
+    stamina_index DOUBLE PRECISION,
+    prev_pitch_1 BIGINT,
+    prev_pitch_2 BIGINT,
+    prev_pitch_3 BIGINT,
+    pitcher_ff_pct DOUBLE PRECISION,
+    pitcher_sl_pct DOUBLE PRECISION,
+    pitcher_ch_pct DOUBLE PRECISION,
+    pitcher_si_pct DOUBLE PRECISION,
+    pitcher_cu_pct DOUBLE PRECISION,
+    pitcher_fc_pct DOUBLE PRECISION,
+    
+    -- 카운트 ahead (투수 유리)
+    pitcher_ff_pct_ahead DOUBLE PRECISION, pitcher_sl_pct_ahead DOUBLE PRECISION, pitcher_ch_pct_ahead DOUBLE PRECISION,
+    pitcher_si_pct_ahead DOUBLE PRECISION, pitcher_cu_pct_ahead DOUBLE PRECISION, pitcher_fc_pct_ahead DOUBLE PRECISION,
+    -- 카운트 behind (타자 유리)
+    pitcher_ff_pct_behind DOUBLE PRECISION, pitcher_sl_pct_behind DOUBLE PRECISION, pitcher_ch_pct_behind DOUBLE PRECISION,
+    pitcher_si_pct_behind DOUBLE PRECISION, pitcher_cu_pct_behind DOUBLE PRECISION, pitcher_fc_pct_behind DOUBLE PRECISION,
+    -- 카운트 even (동등)
+    pitcher_ff_pct_even DOUBLE PRECISION, pitcher_sl_pct_even DOUBLE PRECISION, pitcher_ch_pct_even DOUBLE PRECISION,
+    pitcher_si_pct_even DOUBLE PRECISION, pitcher_cu_pct_even DOUBLE PRECISION, pitcher_fc_pct_even DOUBLE PRECISION,
+    -- vs 좌타 (matchup vs L)
+    pitcher_ff_pct_vsL DOUBLE PRECISION, pitcher_sl_pct_vsL DOUBLE PRECISION, pitcher_ch_pct_vsL DOUBLE PRECISION,
+    pitcher_si_pct_vsL DOUBLE PRECISION, pitcher_cu_pct_vsL DOUBLE PRECISION, pitcher_fc_pct_vsL DOUBLE PRECISION,
+    -- vs 우타 (matchup vs R)
+    pitcher_ff_pct_vsR DOUBLE PRECISION, pitcher_sl_pct_vsR DOUBLE PRECISION, pitcher_ch_pct_vsR DOUBLE PRECISION,
+    pitcher_si_pct_vsR DOUBLE PRECISION, pitcher_cu_pct_vsR DOUBLE PRECISION, pitcher_fc_pct_vsR DOUBLE PRECISION
 
     -- 대용량 피칭 데이터는 '투구' 단위이므로 player_id(복합키) 대신 별도 인덱스로 조회 성능 확보
 );

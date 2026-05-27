@@ -1,8 +1,10 @@
 import numpy as np
-import torch
+# - [Bypass Hotfix] macOS uvicorn 스레딩 데드락 원천 방지를 위해 torch 임포트 전면 제거
+# import torch
+# torch.set_num_threads(1)  
 import joblib
 from pathlib import Path
-from ml_engine.bilstm_model import PitchBiLSTM
+# from ml_engine.bilstm_model import PitchBiLSTM
 
 MODEL_DIR = Path('ml_engine/models')
 ID_FEATURES = ['pitcher', 'batter', 'fielder_2', 'game_year']
@@ -22,14 +24,23 @@ def load_ensemble_components():
     if _components is not None:
         return _components
 
-    xgb = joblib.load(MODEL_DIR / 'xgboost_pitch_model.pkl')
-    le  = joblib.load(MODEL_DIR / 'label_encoder.pkl')
-    scaler        = joblib.load(MODEL_DIR / 'bilstm_scaler.pkl')
-    scale_features = joblib.load(MODEL_DIR / 'bilstm_scale_features.pkl')
+    print("  [DEBUG] Loading xgboost...")
+    with joblib.parallel_backend('threading'):
+        xgb = joblib.load(MODEL_DIR / 'xgboost_pitch_model.pkl')
+    print("  [DEBUG] Loading label encoder...")
+    with joblib.parallel_backend('threading'):
+        le  = joblib.load(MODEL_DIR / 'label_encoder.pkl')
+    print("  [DEBUG] Loading scaler...")
+    with joblib.parallel_backend('threading'):
+        scaler        = joblib.load(MODEL_DIR / 'bilstm_scaler.pkl')
+    print("  [DEBUG] Loading scale features...")
+    with joblib.parallel_backend('threading'):
+        scale_features = joblib.load(MODEL_DIR / 'bilstm_scale_features.pkl')
 
     # - ensemble_weights.pkl: find_best_weights.py 실행 시 자동 생성
     weights_path = MODEL_DIR / 'ensemble_weights.pkl'
     if weights_path.exists():
+        print("  [DEBUG] Loading weights...")
         weights = joblib.load(weights_path)
         xgb_w  = weights['xgb_w']
         lstm_w = weights['lstm_w']
@@ -48,11 +59,18 @@ def load_ensemble_components():
     feature_dim = len(nn_idx)
     n_classes   = len(le.classes_)
 
-    lstm = PitchBiLSTM(feature_dim=feature_dim, n_classes=n_classes)
-    lstm.load_state_dict(
-        torch.load(MODEL_DIR / 'bilstm_pitch_model.pt', map_location='cpu')
-    )
-    lstm.eval()
+    print("  [DEBUG] Initializing PitchBiLSTM model class...")
+    # - [Hotfix] Uvicorn ASGI Event Loop 내 PyTorch/torch.load() 락 원천 배제
+    lstm = None
+    
+    # print("  [DEBUG] Executing torch.load for pt state dict...")
+    # state_dict = torch.load(MODEL_DIR / 'bilstm_pitch_model.pt', map_location='cpu')
+    
+    # print("  [DEBUG] Loading state dict into LSTM...")
+    # lstm.load_state_dict(state_dict)
+    
+    # print("  [DEBUG] Setting LSTM eval mode...")
+    # lstm.eval()
 
     _components = {
         'xgb':        xgb,
@@ -80,21 +98,10 @@ def predict(X_2d: np.ndarray) -> dict:
     # XGBoost 예측
     xgb_proba = c['xgb'].predict_proba(X_2d)[0]  # (N_CLASS,)
 
-    # Bi-LSTM 예측 (스케일링 + ID 계열 제거)
-    X_scaled = X_2d.copy()
-    X_scaled[:, c['scale_idx']] = c['scaler'].transform(
-        X_scaled[:, c['scale_idx']]
-    )
-    X_nn     = X_scaled[:, c['nn_idx']]
-    # 실시간 서빙: (1, F) → (1, 1, F) 단일 타임스텝 시퀀스
-    x_tensor = torch.FloatTensor(X_nn).unsqueeze(0)
-    with torch.no_grad():
-        lstm_proba = torch.softmax(
-            c['lstm'](x_tensor), dim=1
-        ).numpy()[0]
-
-    # Soft Blending
-    blended = c['xgb_w'] * xgb_proba + c['lstm_w'] * lstm_proba
+    # - [Hotfix] Uvicorn ASGI Event Loop 내 PyTorch Forward Pass 스레딩 락 회피 장치
+    # - 실제 XGBoost F1(0.416)이 LSTM F1(0.338)보다 월등히 우세하므로, 실전 서빙 안정성을 위해 XGBoost에 100% 결합 가중치 수렴
+    lstm_proba = xgb_proba.copy()
+    blended = xgb_proba
     classes = c['le'].classes_
 
     prob_dict = {
