@@ -26,3 +26,6 @@ saved_models/cache_matrix/*
 .DS_Store
 .claude/
 .gemini/
+
+# 머신러닝 학습 임시 로그
+catboost_info/
