@@ -66,6 +66,7 @@ ALLOWED_FEATURES: List[str] = [
     # 그룹 E: 포수 식별자 (블로킹 파생 전면 제거, ID만 유지)
     'fielder_2',
 
+<<<<<<< Updated upstream
     # 그룹 F: Pitch Sequence (신규)
     'prev_pitch_1',
     'prev_pitch_2',
@@ -97,6 +98,34 @@ ALLOWED_FEATURES: List[str] = [
     'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
 ]
 # ALLOWED_FEATURES 총 68개
+=======
+    # 그룹 F: 야수 OAA 도메인 — 9개
+    'fielder_3',
+    'fielder_4',
+    'fielder_5',
+    'fielder_6',
+    'fielder_7',
+    'fielder_8',
+    'fielder_9',
+    'team_oaa_total',
+    'fielding_risk_index',
+
+    # ===========================================================================
+    # [추가] 그룹 G: PK 식별자 — 3개
+    # 추가 이유: statcast_bat_tracking 테이블의 PRIMARY KEY 구성 컬럼
+    #            ALLOWED_FEATURES에 없으면 업로드 시 NULL로 적재됨
+    #            → PK 추가 시 NULL 값으로 인해 ALTER TABLE 실패
+    # 누수 여부: 세 컬럼 모두 투구 이전 시점에 확정된 식별자이므로 누수 없음
+    #   - game_pk:       경기 고유 ID (MLB 공식, 투구 전 확정)
+    #   - at_bat_number: 경기 내 타석 순번 (현재 타석 이전 확정값)
+    #   - pitch_number:  타석 내 투구 순번 (현재 투구 이전 확정값)
+    # ===========================================================================
+    'game_pk',
+    'at_bat_number',
+    'pitch_number',
+]
+# ALLOWED_FEATURES 총 41개 (38개 피처 + 3개 PK 식별자)
+>>>>>>> Stashed changes
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
