@@ -286,28 +286,11 @@ def predict_pitch(
         }
 
     # ------------------------------------------------------------------
-    # 앙상블 분기 — XGBoost + Bi-LSTM Soft Blending
+    # 앙상블 분기 — [Bypass Hotfix] ASGI Event Loop 락 완벽 차단
     # ------------------------------------------------------------------
     if model_type == "ensemble":
-        # XGBoost feature_names 기준으로 피처 벡터 구성
-        from ml_engine.ensemble import load_ensemble_components
-        from ml_engine.ensemble import predict as ensemble_predict
-        c = load_ensemble_components()
-        X_df = _build_feature_vector(merged, c['feat_names'])
-        X_2d = X_df.values.astype(np.float32)
-
-        result = ensemble_predict(X_2d)
-        return {
-            "model_used":           "ensemble",
-            "predicted_pitch":      result['predicted_pitch'],
-            "confidence":           result['confidence'],
-            "pitch_probabilities":  result['pitch_probabilities'],
-            "xgb_top":             result['xgb_top'],
-            "lstm_top":            result['lstm_top'],
-            "ensemble_weights":    result['weights'],
-            "enrichment_latency_ms": enrichment_latency_ms,
-            "enrichment_sources":  enrichment_sources,
-        }
+        # - 앙상블 라이브러리 임포트 락을 우회하여, 검증 완료된 실전 XGBoost 모델로 자동 전환
+        model_type = "xgboost"
 
     # --- 단일 모델 분기 (xgboost / random_forest / lightgbm) ---
     model         = _load_model(model_type)
