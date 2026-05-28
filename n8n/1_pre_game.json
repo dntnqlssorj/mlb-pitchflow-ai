@@ -1,0 +1,309 @@
+{
+  "name": "1_pre_game — MLB 경기 컨텍스트 사전 세팅",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 11,14,17 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "30 12,15,18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-001-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notesInFlow": true,
+      "notes": "T-2h 실행:  11:00 / 14:00 / 17:00 ET (1PM·4PM·7PM 경기 기준)\nT-30min 실행: 12:30 / 15:30 / 18:30 ET (lineup 변경 대응)\n실제 운영: MLB schedule API로 경기 시간 확인 후 동적 트리거 권장"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://statsapi.mlb.com/api/v1/schedule",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "sportId", "value": "1" },
+            { "name": "date",    "value": "={{ $now.format('YYYY-MM-DD') }}" },
+            { "name": "hydrate", "value": "probablePitcher,lineups,teams" }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": { "neverError": true }
+          }
+        }
+      },
+      "id": "node-002-http-schedule",
+      "name": "MLB 오늘 경기 목록",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 300],
+      "notesInFlow": true,
+      "notes": "MLB Stats API 공개 엔드포인트 (인증 불필요)\nGET https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=YYYY-MM-DD"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Node 3: game_pk 배열 파싱 + 오늘 날짜 필터링 ──────────────────────────\nconst data  = $input.first().json;\nconst today = $now.format('YYYY-MM-DD');\nconst games = [];\n\nfor (const dateEntry of (data.dates || [])) {\n  // 오늘 날짜만 처리\n  if (dateEntry.date !== today) continue;\n\n  for (const game of (dateEntry.games || [])) {\n    // 이미 종료된 경기 스킵\n    if (game.status?.abstractGameState === 'Final') continue;\n\n    games.push({\n      game_pk:         game.gamePk,\n      game_date:       dateEntry.date,\n      game_datetime:   game.gameDate,\n      home_team_id:    game.teams?.home?.team?.id,\n      home_team:       game.teams?.home?.team?.name,\n      away_team_id:    game.teams?.away?.team?.id,\n      away_team:       game.teams?.away?.team?.name,\n      status:          game.status?.detailedState,\n      home_pitcher_id: game.teams?.home?.probablePitcher?.id ?? null,\n      away_pitcher_id: game.teams?.away?.probablePitcher?.id ?? null\n    });\n  }\n}\n\nif (games.length === 0) {\n  // 경기 없을 때 빈 결과로 워크플로우 종료\n  return [{ json: { skipped: true, reason: '오늘 예정 경기 없음', date: today } }];\n}\n\n// 경기별 아이템 분기 → 이후 노드가 경기 수만큼 루프 실행\nreturn games.map(g => ({ json: g }));"
+      },
+      "id": "node-003-code-gamepk",
+      "name": "game_pk 파싱",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 300],
+      "notesInFlow": true,
+      "notes": "오늘 날짜 경기만 추출, Final 상태 제외\n복수 경기 → 각 game_pk를 독립 item으로 분기"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://statsapi.mlb.com/api/v1/game/{{ $json.game_pk }}/boxscore",
+        "options": {
+          "response": {
+            "response": { "neverError": true }
+          }
+        }
+      },
+      "id": "node-004-http-lineup",
+      "name": "라인업 조회",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 300],
+      "notesInFlow": true,
+      "notes": "game_pk별 boxscore API 호출 (선발 투수·타순·포수·수비진 수집)\nNode 3 아이템 수만큼 병렬 루프 실행"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Node 5: pitcher_id · catcher_id · fielder_ids 추출 ───────────────────────\n// 양방향 플레이어(투수이자 타자, 예: 오타니) 예외 처리 포함\nconst boxscore = $input.first().json;\nconst gameInfo = $('game_pk 파싱').item.json; // 페어링된 상위 아이템\n\nconst result = [];\n\nfor (const side of ['home', 'away']) {\n  const team = boxscore.teams?.[side];\n  if (!team) continue;\n\n  const pitcherIds        = team.pitchers || [];\n  const startingPitcherId = pitcherIds[0] ?? null;\n  if (!startingPitcherId) continue; // 선발 투수 미확정 시 스킵\n\n  let   catcherId   = null;\n  const fielderIds  = [];\n  let   isTwoWay    = false;\n\n  for (const playerId of (team.battingOrder || [])) {\n    const player  = team.players?.[`ID${playerId}`];\n    const posCode = player?.position?.code;\n\n    // 포수(position 2) 추출\n    if (posCode === '2') catcherId = playerId;\n\n    // 양방향 플레이어 감지: 타선에 포함된 투수\n    if (posCode === '1' && pitcherIds.includes(playerId)) isTwoWay = true;\n\n    // 야수 포지션(3~9) 추출\n    const posNum = parseInt(posCode);\n    if (posNum >= 3 && posNum <= 9) {\n      fielderIds.push({ fielder_id: playerId, position: posNum });\n    }\n  }\n\n  // 상대 타선 좌/우타 분포 집계 (AI matchup 분석용)\n  const oppSide   = side === 'home' ? 'away' : 'home';\n  const oppTeam   = boxscore.teams?.[oppSide];\n  const oppBatters = [];\n  for (const playerId of (oppTeam?.battingOrder || [])) {\n    const player = oppTeam?.players?.[`ID${playerId}`];\n    oppBatters.push({\n      batter_id:   playerId,\n      batter_name: player?.person?.fullName,\n      bat_side:    player?.batSide?.code,\n      position:    player?.position?.abbreviation\n    });\n  }\n\n  result.push({\n    json: {\n      game_pk:          gameInfo.game_pk,\n      game_date:        gameInfo.game_date,\n      pitcher_id:       startingPitcherId,\n      pitcher_side:     side,\n      catcher_id:       catcherId,\n      fielder_ids:      fielderIds,\n      is_two_way:       isTwoWay,\n      opp_batters:      oppBatters,\n      opp_left_count:   oppBatters.filter(b => b.bat_side === 'L').length,\n      opp_right_count:  oppBatters.filter(b => b.bat_side === 'R').length\n    }\n  });\n}\n\nreturn result;"
+      },
+      "id": "node-005-code-players",
+      "name": "선수 ID 추출",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "notesInFlow": true,
+      "notes": "선발 투수 / 포수 / 야수 ID 추출\n양방향 플레이어(투수+타자 겸임) is_two_way 플래그\n상대 타선 좌/우타 분포 집계\n홈·원정 투수 → 각각 독립 item 반환"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "getAll",
+        "tableId": "statcast_bat_tracking",
+        "returnAll": false,
+        "limit": 500,
+        "filterType": "string",
+        "filterString": "=pitcher=eq.{{ $json.pitcher_id }}&game_year=gte.2024&order=game_pk.desc"
+      },
+      "id": "node-006-supabase-baseline",
+      "name": "시즌 베이스라인 조회",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1400, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "활용 인덱스: idx_bat_tracking_pitcher_year\n최근 500투구 기준 구종 비율 산출 → AI Agent 입력\n※ Supabase 자격증명 연결 필요"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## 분석 요청\n\n**game_pk**: {{ $('선수 ID 추출').item.json.game_pk }}\n**선발 투수 ID**: {{ $('선수 ID 추출').item.json.pitcher_id }}\n**투수 소속**: {{ $('선수 ID 추출').item.json.pitcher_side }}\n**포수 ID**: {{ $('선수 ID 추출').item.json.catcher_id }}\n**양방향 선수 여부**: {{ $('선수 ID 추출').item.json.is_two_way }}\n\n### 상대 타선 구성\n- 좌타자: {{ $('선수 ID 추출').item.json.opp_left_count }}명\n- 우타자: {{ $('선수 ID 추출').item.json.opp_right_count }}명\n- 타순 상세:\n{{ JSON.stringify($('선수 ID 추출').item.json.opp_batters, null, 2) }}\n\n### 투수 최근 투구 데이터 (최근 500구, game_pk 내림차순)\n{{ JSON.stringify($input.all().map(i => i.json), null, 2) }}\n\n위 데이터를 분석하여 오늘 경기 전술 컨텍스트 JSON을 반환해라.",
+        "options": {
+          "systemMessage": "너는 MLB 투구 전술 분석 전문가다.\n선발 투수 최근 5경기 구종 비율과\n상대 타선 좌/우타 구성을 분석하여\n오늘 경기 전술 컨텍스트를 요약해라.\n추측하지 마라. 데이터가 없으면 데이터 부족이라고 명시해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"context_summary\": \"string\",\n  \"key_matchups\": [\"string\"],\n  \"recommended_focus\": \"string\"\n}"
+        }
+      },
+      "id": "node-007-ai-agent",
+      "name": "전술 분석 AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1680, 300],
+      "notesInFlow": true,
+      "notes": "Model: claude-sonnet-4-20250514 (하위 노드로 연결)\n구종 비율 + 타선 구성 → 전술 컨텍스트 JSON\n출력: { context_summary, key_matchups, recommended_focus }"
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "maxTokens": 1024,
+          "temperature": 0.2
+        }
+      },
+      "id": "node-007a-anthropic-model",
+      "name": "Claude Sonnet",
+      "type": "@n8n/n8n-nodes-langchain.lmAnthropicChatModel",
+      "typeVersion": 1.3,
+      "position": [1680, 540],
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "AI Agent의 Language Model 서브노드\n※ Anthropic API 자격증명 연결 필요"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "tableId": "game_context",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "game_pk",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.game_pk }}"
+            },
+            {
+              "fieldId": "pitcher_id",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.pitcher_id }}"
+            },
+            {
+              "fieldId": "context_summary",
+              "fieldValue": "={{ JSON.parse($json.output).context_summary }}"
+            },
+            {
+              "fieldId": "key_matchups",
+              "fieldValue": "={{ JSON.stringify(JSON.parse($json.output).key_matchups) }}"
+            },
+            {
+              "fieldId": "recommended_focus",
+              "fieldValue": "={{ JSON.parse($json.output).recommended_focus }}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "id": "node-008-supabase-save",
+      "name": "AI 요약 저장",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1960, 160],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "game_context 테이블 upsert\nAI 요약 결과 저장 (context_summary · key_matchups · recommended_focus)\n※ Supabase 자격증명 연결 필요"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "tableId": "game_context",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "game_pk",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.game_pk }}"
+            },
+            {
+              "fieldId": "pitcher_id",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.pitcher_id }}"
+            },
+            {
+              "fieldId": "pitch_count",
+              "fieldValue": "0"
+            },
+            {
+              "fieldId": "catcher_id",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.catcher_id }}"
+            },
+            {
+              "fieldId": "game_date",
+              "fieldValue": "={{ $('선수 ID 추출').item.json.game_date }}"
+            }
+          ]
+        }
+      },
+      "id": "node-009-supabase-init",
+      "name": "pitch_count 초기화",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1960, 440],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "game_context 테이블 pitch_count = 0 초기화 upsert\nPK: (game_pk, pitcher_id)\n경기 전 컨텍스트 행 보장"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [{ "node": "MLB 오늘 경기 목록", "type": "main", "index": 0 }]
+      ]
+    },
+    "MLB 오늘 경기 목록": {
+      "main": [
+        [{ "node": "game_pk 파싱", "type": "main", "index": 0 }]
+      ]
+    },
+    "game_pk 파싱": {
+      "main": [
+        [{ "node": "라인업 조회", "type": "main", "index": 0 }]
+      ]
+    },
+    "라인업 조회": {
+      "main": [
+        [{ "node": "선수 ID 추출", "type": "main", "index": 0 }]
+      ]
+    },
+    "선수 ID 추출": {
+      "main": [
+        [{ "node": "시즌 베이스라인 조회", "type": "main", "index": 0 }]
+      ]
+    },
+    "시즌 베이스라인 조회": {
+      "main": [
+        [{ "node": "전술 분석 AI Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Sonnet": {
+      "ai_languageModel": [
+        [{ "node": "전술 분석 AI Agent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "전술 분석 AI Agent": {
+      "main": [
+        [
+          { "node": "AI 요약 저장",      "type": "main", "index": 0 },
+          { "node": "pitch_count 초기화", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "pitchflow-ai"
+  },
+  "id": "pitchflow-pre-game-v1",
+  "tags": [
+    { "name": "MLB" },
+    { "name": "pre-game" },
+    { "name": "supabase" }
+  ]
+}

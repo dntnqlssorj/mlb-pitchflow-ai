@@ -1,0 +1,351 @@
+{
+  "name": "2_in_game — 실시간 투구 감지 및 예측 Push",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 8
+            }
+          ]
+        }
+      },
+      "id": "node-001-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notesInFlow": true,
+      "notes": "8초 간격 폴링 (피치클락 15초 기준 안전 마진 확보)\nn8n 워크플로우 변수 설정 필요:\n  game_pk              = 대상 경기 game_pk\n  fastapi_base_url     = FastAPI 서버 주소\n  frontend_webhook_url = 프론트엔드 Push 수신 URL"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://statsapi.mlb.com/api/v1/game/{{ $vars.game_pk }}/feed/live",
+        "options": {
+          "response": {
+            "response": { "neverError": true }
+          },
+          "timeout": 6000
+        }
+      },
+      "id": "node-002-http-livefeed",
+      "name": "MLB Live Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 300],
+      "notesInFlow": true,
+      "notes": "MLB Stats API 공개 엔드포인트 (인증 불필요)\nGET /v1/game/{game_pk}/feed/live\n경기 전체 이벤트 로그 실시간 수집"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Node 3: 투구 diff 감지 (피치클락 8초 폴링) ──────────────────────────────\n// 정적 데이터로 폴링 사이클 간 상태 유지 (n8n 재시작 시 초기화됨)\nconst staticData = $getWorkflowStaticData('global');\nconst feed       = $input.first().json;\n\nconst gameState   = feed.gameData?.status?.abstractGameState;\nconst currentPlay = feed.liveData?.plays?.currentPlay;\nconst linescore   = feed.liveData?.linescore;\n\n// ① 현재 타석 + 누적 투구 수 기반 고유 pitch ID 생성\nconst atBatIdx    = currentPlay?.about?.atBatIndex ?? -1;\nconst pitchEvents = (currentPlay?.playEvents ?? []).filter(e => e.isPitch);\nconst pitchCount  = pitchEvents.length;\nconst pitchId     = `${atBatIdx}-${pitchCount}`;\nconst lastPitchId = staticData.lastPitchId ?? '';\n\n// ② 신규 투구 없음 → IF Node에서 FALSE 분기\nif (pitchCount === 0 || pitchId === lastPitchId) {\n  return [{\n    json: {\n      has_new_pitch: false,\n      game_state:    gameState,\n      game_pk:       feed.gamePk\n    }\n  }];\n}\n\n// ③ 신규 투구 감지 → 수비팀 야수 ID 추출\nconst latestPitch = pitchEvents[pitchEvents.length - 1];\nconst boxscore    = feed.liveData?.boxscore;\nconst halfInning  = currentPlay?.about?.halfInning ?? 'top';\nconst defSide     = halfInning === 'top' ? 'home' : 'away';\nconst defTeam     = boxscore?.teams?.[defSide];\n\nlet   catcherId  = null;\nconst fielderIds = [];\nfor (const [, player] of Object.entries(defTeam?.players ?? {})) {\n  const posCode = player?.position?.code;\n  const id      = player?.person?.id;\n  if (!id) continue;\n  if (posCode === '2') catcherId = id;\n  const posNum = parseInt(posCode);\n  if (posNum >= 3 && posNum <= 9) fielderIds.push(id);\n}\n\n// ④ 상태 저장 (다음 폴링에서 비교용)\nstaticData.lastPitchId = pitchId;\n\nreturn [{\n  json: {\n    has_new_pitch:  true,\n    game_pk:        feed.gamePk,\n    at_bat_number:  atBatIdx,\n    pitch_number:   latestPitch.pitchNumber,\n    pitcher_id:     currentPlay?.matchup?.pitcher?.id,\n    batter_id:      currentPlay?.matchup?.batter?.id,\n    catcher_id:     catcherId,\n    fielder_ids:    fielderIds.slice(0, 7),\n    inning:         linescore?.currentInning,\n    balls:          currentPlay?.count?.balls,\n    strikes:        currentPlay?.count?.strikes,\n    outs:           currentPlay?.count?.outs,\n    on_1b:          linescore?.offense?.first  ? 1 : 0,\n    on_2b:          linescore?.offense?.second ? 1 : 0,\n    on_3b:          linescore?.offense?.third  ? 1 : 0,\n    game_state:     gameState\n  }\n}];"
+      },
+      "id": "node-003-code-diff",
+      "name": "투구 diff 감지",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 300],
+      "notesInFlow": true,
+      "notes": "$getWorkflowStaticData로 폴링 사이클 간 lastPitchId 유지\npitchId = `{atBatIndex}-{pitchCount}` 조합으로 중복 감지\n신규 투구 없으면 has_new_pitch: false → Node 4 FALSE 분기"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-has-new-pitch",
+              "leftValue": "={{ $json.has_new_pitch }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-004-if-newpitch",
+      "name": "신규 투구 여부",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [840, 300],
+      "notesInFlow": true,
+      "notes": "TRUE  → Node 5 FastAPI 예측 요청\nFALSE → 이번 사이클 종료 (8초 후 재폴링)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.fastapi_base_url }}/predict/pitch",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "game_pk":       "={{ $json.game_pk }}",
+          "at_bat_number": "={{ $json.at_bat_number }}",
+          "pitch_number":  "={{ $json.pitch_number }}",
+          "pitcher_id":    "={{ $json.pitcher_id }}",
+          "batter_id":     "={{ $json.batter_id }}",
+          "catcher_id":    "={{ $json.catcher_id }}",
+          "fielder_ids":   "={{ $json.fielder_ids }}",
+          "inning":        "={{ $json.inning }}",
+          "balls":         "={{ $json.balls }}",
+          "strikes":       "={{ $json.strikes }}",
+          "outs":          "={{ $json.outs }}",
+          "on_1b":         "={{ $json.on_1b }}",
+          "on_2b":         "={{ $json.on_2b }}",
+          "on_3b":         "={{ $json.on_3b }}"
+        },
+        "options": {
+          "response": {
+            "response": { "neverError": false }
+          },
+          "timeout": 5000
+        }
+      },
+      "id": "node-005-http-fastapi",
+      "name": "FastAPI 투구 예측",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "notesInFlow": true,
+      "notes": "POST {fastapi_base_url}/predict/pitch\nenrichment은 FastAPI 내부에서 Supabase 조회로 처리\n예상 응답: { predicted_type: 'FF', probabilities: {FF:0.45, SL:0.25, ...} }"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=## 투구 예측 분석 요청\n\n**경기 상황**\n- game_pk: {{ $('투구 diff 감지').item.json.game_pk }}\n- 이닝: {{ $('투구 diff 감지').item.json.inning }}\n- 볼카운트: {{ $('투구 diff 감지').item.json.balls }}볼 {{ $('투구 diff 감지').item.json.strikes }}스트라이크\n- 아웃: {{ $('투구 diff 감지').item.json.outs }}아웃\n- 주자: 1루={{ $('투구 diff 감지').item.json.on_1b }}, 2루={{ $('투구 diff 감지').item.json.on_2b }}, 3루={{ $('투구 diff 감지').item.json.on_3b }}\n- 투수 ID: {{ $('투구 diff 감지').item.json.pitcher_id }}\n- 타자 ID: {{ $('투구 diff 감지').item.json.batter_id }}\n\n**모델 예측 결과**\n- 예측 구종: {{ $json.predicted_type }}\n- 구종별 확률 분포:\n{{ JSON.stringify($json.probabilities, null, 2) }}\n\n위 데이터를 분석하여 투구 전술 해설 JSON을 반환해라.",
+        "options": {
+          "systemMessage": "너는 MLB 투구 전술 해설 전문가다.\n구종 예측 확률 분포와 현재 경기 상황을 받아\n왜 이 구종이 추천되는지 자연어로 해설해라.\n추측하지 마라. 데이터 기반으로만 설명해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"confidence\": \"high | medium | low\"\n}"
+        }
+      },
+      "id": "node-006-ai-agent",
+      "name": "전술 해설 AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1400, 300],
+      "notesInFlow": true,
+      "notes": "Model: claude-sonnet-4-20250514 (하위 노드로 연결)\n예측 확률 분포 + 경기 상황 → 전술 해설 JSON\n출력: { commentary, reasoning, confidence }"
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "maxTokens": 512,
+          "temperature": 0.3
+        }
+      },
+      "id": "node-006a-anthropic-model",
+      "name": "Claude Sonnet",
+      "type": "@n8n/n8n-nodes-langchain.lmAnthropicChatModel",
+      "typeVersion": 1.3,
+      "position": [1400, 540],
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "AI Agent의 Language Model 서브노드\n※ Anthropic API 자격증명 연결 필요"
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "upsert",
+        "tableId": "prediction_log",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "game_pk",
+              "fieldValue": "={{ $('투구 diff 감지').item.json.game_pk }}"
+            },
+            {
+              "fieldId": "at_bat_number",
+              "fieldValue": "={{ $('투구 diff 감지').item.json.at_bat_number }}"
+            },
+            {
+              "fieldId": "pitch_number",
+              "fieldValue": "={{ $('투구 diff 감지').item.json.pitch_number }}"
+            },
+            {
+              "fieldId": "predicted_type",
+              "fieldValue": "={{ $('FastAPI 투구 예측').item.json.predicted_type }}"
+            },
+            {
+              "fieldId": "probability_json",
+              "fieldValue": "={{ JSON.stringify($('FastAPI 투구 예측').item.json.probabilities) }}"
+            },
+            {
+              "fieldId": "ai_commentary",
+              "fieldValue": "={{ JSON.parse($json.output).commentary }}"
+            },
+            {
+              "fieldId": "ai_reasoning",
+              "fieldValue": "={{ JSON.parse($json.output).reasoning }}"
+            },
+            {
+              "fieldId": "ai_confidence",
+              "fieldValue": "={{ JSON.parse($json.output).confidence }}"
+            },
+            {
+              "fieldId": "inference_ts",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "id": "node-007-supabase-log",
+      "name": "prediction_log 저장",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1680, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "notesInFlow": true,
+      "notes": "prediction_log 테이블 upsert\nPK: (game_pk, at_bat_number, pitch_number)\n저장: predicted_type, probability_json, ai_commentary, ai_reasoning, ai_confidence, inference_ts\n※ Supabase 자격증명 연결 필요"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.frontend_webhook_url }}",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "event":          "new_pitch_prediction",
+          "game_pk":        "={{ $('투구 diff 감지').item.json.game_pk }}",
+          "at_bat_number":  "={{ $('투구 diff 감지').item.json.at_bat_number }}",
+          "pitch_number":   "={{ $('투구 diff 감지').item.json.pitch_number }}",
+          "inning":         "={{ $('투구 diff 감지').item.json.inning }}",
+          "count":          "={{ $('투구 diff 감지').item.json.balls }}B-{{ $('투구 diff 감지').item.json.strikes }}S",
+          "predicted_type": "={{ $('FastAPI 투구 예측').item.json.predicted_type }}",
+          "probabilities":  "={{ $('FastAPI 투구 예측').item.json.probabilities }}",
+          "commentary":     "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).commentary }}",
+          "reasoning":      "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).reasoning }}",
+          "confidence":     "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).confidence }}",
+          "inference_ts":   "={{ $now.toISO() }}"
+        },
+        "options": {
+          "response": {
+            "response": { "neverError": true }
+          },
+          "timeout": 3000
+        }
+      },
+      "id": "node-008-http-webhook",
+      "name": "프론트엔드 Push",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 300],
+      "notesInFlow": true,
+      "notes": "POST {frontend_webhook_url}\n예측 확률 + AI 해설 실시간 Push\nneverError: true → Push 실패 시에도 파이프라인 중단 없이 계속"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-game-over",
+              "leftValue": "={{ $('MLB Live Feed').first().json.gameData.status.abstractGameState }}",
+              "rightValue": "Final",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-009-if-gameover",
+      "name": "경기 종료 감지",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2240, 300],
+      "notesInFlow": true,
+      "notes": "TRUE  → 경기 종료: 워크플로우 비활성화 권장\n        n8n API: PATCH /api/v1/workflows/{workflowId}/deactivate\nFALSE → 경기 진행 중: 이번 사이클 종료 후 8초 후 재폴링"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [{ "node": "MLB Live Feed", "type": "main", "index": 0 }]
+      ]
+    },
+    "MLB Live Feed": {
+      "main": [
+        [{ "node": "투구 diff 감지", "type": "main", "index": 0 }]
+      ]
+    },
+    "투구 diff 감지": {
+      "main": [
+        [{ "node": "신규 투구 여부", "type": "main", "index": 0 }]
+      ]
+    },
+    "신규 투구 여부": {
+      "main": [
+        [{ "node": "FastAPI 투구 예측", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "FastAPI 투구 예측": {
+      "main": [
+        [{ "node": "전술 해설 AI Agent", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude Sonnet": {
+      "ai_languageModel": [
+        [{ "node": "전술 해설 AI Agent", "type": "ai_languageModel", "index": 0 }]
+      ]
+    },
+    "전술 해설 AI Agent": {
+      "main": [
+        [{ "node": "prediction_log 저장", "type": "main", "index": 0 }]
+      ]
+    },
+    "prediction_log 저장": {
+      "main": [
+        [{ "node": "프론트엔드 Push", "type": "main", "index": 0 }]
+      ]
+    },
+    "프론트엔드 Push": {
+      "main": [
+        [{ "node": "경기 종료 감지", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "pitchflow-ai"
+  },
+  "id": "pitchflow-in-game-v1",
+  "tags": [
+    { "name": "MLB" },
+    { "name": "in-game" },
+    { "name": "real-time" },
+    { "name": "supabase" }
+  ]
+}
