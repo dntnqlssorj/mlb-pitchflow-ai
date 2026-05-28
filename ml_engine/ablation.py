@@ -104,8 +104,14 @@ def load_data(sampling_rate: float) -> tuple:
     if sampling_rate < 1.0:
         bat_df = bat_df.sample(frac=sampling_rate, random_state=42).copy()
 
+<<<<<<< Updated upstream
     # 3. 피처 엔지니어링 수행 (새로운 시그니처 반영)
     df = calculate_pitcher_stamina_decay(bat_df, season_baseline, baseline_pitches=15)
+=======
+    # - 샘플링 전 전체 bat_df 기준으로 시즌 평균 구속/회전수 사전 산출 (누수 방지)
+    season_baseline_df = build_season_baseline(datasets["bat_tracking"])
+    df = calculate_pitcher_stamina_decay(bat_df, season_baseline_df, baseline_pitches=15)
+>>>>>>> Stashed changes
     df = integrate_catcher_blocking(df, datasets["blocking"])
     df = integrate_fielding_oaa(df, datasets["oaa"])
     df = df.dropna(subset=["pitch_type"])

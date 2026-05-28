@@ -67,41 +67,32 @@
     },
     {
       "parameters": {
-        "resource": "row",
-        "operation": "upsert",
-        "tableId": "statcast_bat_tracking",
-        "fieldsUi": {
-          "fieldValues": [
-            { "fieldId": "game_pk",        "fieldValue": "={{ $json.game_pk }}" },
-            { "fieldId": "at_bat_number",  "fieldValue": "={{ $json.at_bat_number }}" },
-            { "fieldId": "pitch_number",   "fieldValue": "={{ $json.pitch_number }}" },
-            { "fieldId": "pitch_type",     "fieldValue": "={{ $json.pitch_type }}" },
-            { "fieldId": "game_year",      "fieldValue": "={{ $json.game_year }}" },
-            { "fieldId": "pitcher",        "fieldValue": "={{ $json.pitcher }}" },
-            { "fieldId": "batter",         "fieldValue": "={{ $json.batter }}" },
-            { "fieldId": "balls",          "fieldValue": "={{ $json.balls }}" },
-            { "fieldId": "strikes",        "fieldValue": "={{ $json.strikes }}" },
-            { "fieldId": "outs_when_up",   "fieldValue": "={{ $json.outs_when_up }}" },
-            { "fieldId": "inning",         "fieldValue": "={{ $json.inning }}" },
-            { "fieldId": "on_1b",          "fieldValue": "={{ $json.on_1b }}" },
-            { "fieldId": "on_2b",          "fieldValue": "={{ $json.on_2b }}" },
-            { "fieldId": "on_3b",          "fieldValue": "={{ $json.on_3b }}" }
+        "method": "POST",
+        "url": "={{ $vars.supabase_url }}/rest/v1/statcast_bat_tracking",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey",        "value": "={{ $vars.supabase_anon_key }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $vars.supabase_anon_key }}" },
+            { "name": "Content-Type",  "value": "application/json" },
+            { "name": "Prefer",        "value": "resolution=ignore-duplicates,return=minimal" }
           ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify([{ game_pk: $json.game_pk, at_bat_number: $json.at_bat_number, pitch_number: $json.pitch_number, pitch_type: $json.pitch_type, game_year: $json.game_year, pitcher: $json.pitcher, batter: $json.batter, balls: $json.balls, strikes: $json.strikes, outs_when_up: $json.outs_when_up, inning: $json.inning, on_1b: $json.on_1b, on_2b: $json.on_2b, on_3b: $json.on_3b }]) }}",
+        "options": {
+          "response": {
+            "response": { "neverError": true }
+          },
+          "timeout": 10000
         }
       },
       "id": "node-004-supabase-upsert",
       "name": "statcast_bat_tracking upsert",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [840, 300],
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "statcast_bat_tracking 테이블 upsert\nPK: (game_pk, at_bat_number, pitch_number)\nPK 충돌 시 UPDATE, 신규 시 INSERT (멱등성 보장)\n\n⚠️ 프로덕션 최적화:\n  Node 3 → SplitInBatches(1000) → HTTP Request(Supabase REST API 직접 호출)\n  POST {SUPABASE_URL}/rest/v1/statcast_bat_tracking\n  Prefer: resolution=merge-duplicates,return=minimal\n※ Supabase 자격증명 연결 필요"
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 300]
     },
     {
       "parameters": {
