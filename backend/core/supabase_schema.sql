@@ -221,6 +221,7 @@ CREATE TABLE statcast_bat_tracking (
     intercept_ball_minus_batter_pos_y_inches DOUBLE PRECISION,
     
     -- [2026-05-21 추가된 신규 고급 피처 및 파생 변수 컬럼군]
+    pitch_count_in_game BIGINT,
     count_situation BIGINT,
     matchup_type BIGINT,
     base_speed DOUBLE PRECISION,
@@ -252,9 +253,10 @@ CREATE TABLE statcast_bat_tracking (
     pitcher_si_pct_vsL DOUBLE PRECISION, pitcher_cu_pct_vsL DOUBLE PRECISION, pitcher_fc_pct_vsL DOUBLE PRECISION,
     -- vs 우타 (matchup vs R)
     pitcher_ff_pct_vsR DOUBLE PRECISION, pitcher_sl_pct_vsR DOUBLE PRECISION, pitcher_ch_pct_vsR DOUBLE PRECISION,
-    pitcher_si_pct_vsR DOUBLE PRECISION, pitcher_cu_pct_vsR DOUBLE PRECISION, pitcher_fc_pct_vsR DOUBLE PRECISION
+    pitcher_si_pct_vsR DOUBLE PRECISION, pitcher_cu_pct_vsR DOUBLE PRECISION,    pitcher_fc_pct_vsR DOUBLE PRECISION,
 
-    -- 대용량 피칭 데이터는 '투구' 단위이므로 player_id(복합키) 대신 별도 인덱스로 조회 성능 확보
+    -- PK: 투구 단위 고유 식별자 복합키 (plan.md §6.1)
+    PRIMARY KEY (game_pk, at_bat_number, pitch_number)
 );
 
 
@@ -275,3 +277,27 @@ CREATE INDEX idx_bat_tracking_catcher_year ON statcast_bat_tracking (fielder_2, 
 -- 게임 날짜별 또는 경기별 조회가 잦을 경우를 대비한 인덱스
 CREATE INDEX idx_bat_tracking_game_pk ON statcast_bat_tracking (game_pk);
 CREATE INDEX idx_bat_tracking_game_date ON statcast_bat_tracking (game_date);
+
+-- ==============================================================================
+-- plan.md §6.2~6.3 — Covering Index 및 Sequence Index 추가
+-- ==============================================================================
+
+-- [Covering Index 1] 투수 시즌 베이스라인 조회 최적화
+-- fetch_pitcher_season_baseline(): release_speed, release_spin_rate AVG 산출 시
+-- Index-only scan 달성 → heap fetch 배제 → 응답 5ms → 1~2ms
+CREATE INDEX idx_bat_tracking_pitcher_year_covering
+ON statcast_bat_tracking (pitcher, game_year)
+INCLUDE (release_speed, release_spin_rate);
+
+-- [Covering Index 2] 포수 기반 Covering Index
+-- 포수별 리드 패턴 분석 향후 확장 대비
+CREATE INDEX idx_bat_tracking_catcher_year_covering
+ON statcast_bat_tracking (fielder_2, game_year)
+INCLUDE (release_speed, release_spin_rate);
+
+-- [Sequence Index] 현 경기 투구 시퀀스 조회 최적화
+-- fetch_pitch_count_in_game(): pitcher + game_pk COUNT(*) 쿼리
+-- 직전 N구 시퀀스 ORDER BY at_bat_number, pitch_number 쿼리
+-- PK는 game_pk leftmost이므로 pitcher 필터 포함 시 별도 인덱스 필요
+CREATE INDEX idx_bat_tracking_sequence
+ON statcast_bat_tracking (pitcher, game_pk, at_bat_number, pitch_number);

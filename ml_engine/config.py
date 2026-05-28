@@ -96,7 +96,7 @@ ALLOWED_FEATURES: List[str] = [
     'pitcher_ff_pct_vsR', 'pitcher_sl_pct_vsR', 'pitcher_ch_pct_vsR',
     'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
 ]
-# ALLOWED_FEATURES 총 68개
+# ALLOWED_FEATURES 총 66개
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
