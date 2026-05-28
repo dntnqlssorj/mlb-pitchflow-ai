@@ -12,13 +12,8 @@ from ml_engine.feature_engineering import (
     build_season_baseline,
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
-    integrate_fielding_oaa,
-    add_pitch_sequence_features,
-    add_pitcher_repertoire_features,
-    add_situational_features,
-    add_pitcher_situation_features,
+    integrate_fielding_oaa
 )
-from ml_engine.config import ALLOWED_FEATURES, LABEL_COL
 
 # - 환경 변수 로드: .env 파일 자동 감지 및 로드
 load_dotenv()
@@ -52,7 +47,7 @@ def get_supabase_client() -> Client:
 def prepare_master_dataset() -> pd.DataFrame:
     """
     [마스터 데이터프레임 빌드]
-    - 목적: 4개 원본 데이터셋 정제 및 전체 피처 결합 완료된 필터링 데이터셋 반환
+    - 목적: 4개 원본 데이터셋 정제 및 3대 도메인 피처 결합 완료된 최종 129개 컬럼 데이터셋 반환
     """
     print("📦 원본 데이터 로드 및 피처 가공 시작...")
     
@@ -61,87 +56,59 @@ def prepare_master_dataset() -> pd.DataFrame:
     bat_df = datasets['bat_tracking']
     
     # - 도메인 피처 통합: feature_engineering.py 연동
-    season_baseline_df = build_season_baseline(bat_df)
-    df = calculate_pitcher_stamina_decay(bat_df, season_baseline_df, baseline_pitches=15)
+    df = calculate_pitcher_stamina_decay(bat_df, baseline_pitches=15)
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
     
-    # - 신규 고급 피처 엔지니어링 연동 (train.py 구조와 일치)
-    df = add_pitch_sequence_features(df)
-    df = add_pitcher_repertoire_features(df)
-    df = add_situational_features(df)
-    df = add_pitcher_situation_features(df)
-    
-    # - stand 컬럼 수치 인코딩 (R=0, L=1)
-    if 'stand' in df.columns:
-        df['stand'] = df['stand'].map({'R': 0, 'L': 1}).fillna(0).astype(int)
-        
-    # - ALLOWED_FEATURES 화이트리스트 필터링 + PK 식별자 및 라벨 확보 (총 41개 또는 정의된 컬럼만 업로드)
-    meta_cols = ['game_pk', 'at_bat_number', 'pitch_number', LABEL_COL]
-    cols_to_upload = [col for col in ALLOWED_FEATURES if col in df.columns]
-    for col in meta_cols:
-        if col in df.columns and col not in cols_to_upload:
-            cols_to_upload.append(col)
-            
-    df = df[cols_to_upload].copy()
-    
-    # - BIGINT 컬럼 Int64 강제 변환 (DB 타입 에러 방지)
+    # - 데이터 정제: JSON 직렬화 및 DB 호환을 위한 NaN -> None(NULL) 변환
+    # - 특성: Pandas NaN은 JSON 업로드 시 에러를 유발하므로 float/int/object 구분 없이 처리
+    df = df.where(pd.notnull(df), None)
+
+    # - [수정 4] BIGINT 컬럼 타입 강제 변환 (3단계) — ALLOWED_FEATURES 내 정수 컬럼만 대상
+    # - 피처 엔지니어링 후 정수 컬럼들이 float64로 변환됨 (예: is_risp = 1.0)
+    # - DB BIGINT에 "1.0" 입력 시 "invalid input syntax for type bigint" 에러 발생
+    # - 1단계: pd.to_numeric(errors="coerce") → float64 (불가값은 NaN)
+    # - 2단계: .where(notna(), pd.NA)          → NaN을 Int64가 인식하는 pd.NA로 교체
+    # - 3단계: .astype("Int64")               → nullable 정수 타입으로 최종 변환
     bigint_cols = [
-        'pitcher', 'batter', 'fielder_2', 'game_pk', 
-        'at_bat_number', 'pitch_number', 'balls', 'strikes', 
-        'outs_when_up', 'inning', 'on_1b', 'on_2b', 'on_3b',
-        'matchup_type', 'prev_pitch_1', 'prev_pitch_2', 'prev_pitch_3'
+        # 그룹 A: 경기 상황
+        "balls", "strikes", "outs_when_up", "inning",
+        "on_1b", "on_2b", "on_3b",
+        "home_score_diff", "bat_score_diff",
+        # 그룹 B: 투수 이력
+        "pitcher", "game_year", "n_thruorder_pitcher",
+        "pitcher_days_since_prev_game", "age_pit",
+        # 그룹 C: 타자 이력
+        "batter", "stand",
+        "n_priorpa_thisgame_player_at_bat", "batter_days_since_prev_game", "age_bat",
+        # 그룹 D/E: 체력·포수
+        "pitch_count_in_game", "is_risp",
+        # 그룹 E/F: 수비수 ID
+        "fielder_2", "fielder_3", "fielder_4", "fielder_5",
+        "fielder_6", "fielder_7", "fielder_8", "fielder_9",
+        # 그룹 G: PK 식별자
+        "game_pk", "at_bat_number", "pitch_number",
+        # 신규 정수 타입 피처
+        "count_situation", "matchup_type",
+        "prev_pitch_1", "prev_pitch_2", "prev_pitch_3",
     ]
     for col in bigint_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+            numeric = pd.to_numeric(df[col], errors="coerce")
+            df[col] = numeric.where(numeric.notna(), pd.NA).astype("Int64")
 
-    # - 데이터 정제: JSON 직렬화 및 DB 호환을 위한 NaN / inf -> None(NULL) 변환
-    df = df.replace([np.inf, -np.inf], None)
-    df = df.where(pd.notnull(df), None)
-    
+    # - ALLOWED_FEATURES 컬럼 및 target 컬럼(LABEL_COL) 선택
+    upload_cols = [c for c in ALLOWED_FEATURES if c in df.columns]
+    if LABEL_COL in df.columns and LABEL_COL not in upload_cols:
+        upload_cols.append(LABEL_COL)
+        
+    missing = [c for c in ALLOWED_FEATURES if c not in df.columns]
+    if missing:
+        print(f"⚠️ ALLOWED_FEATURES 중 데이터에 없는 컬럼: {missing}")
+    df = df[upload_cols]
+
     print(f"✅ 마스터 데이터 가공 완료: {df.shape[0]} 행, {df.shape[1]} 개 컬럼")
     return df
-
-def _safe_none(val):
-    """
-    [데이터 정제 유틸리티]
-    - NaN, inf, -inf 및 pandas pd.NA 등 JSON 비호환 값을 파이썬 표준 None으로 변환
-    - 29.0과 같이 소수점 아래가 0인 실수를 정수(29)로 자동 캐스팅하여 DB BIGINT 타입 충돌 방지
-    - numpy 기본 타입을 파이썬 기본 데이터 타입으로 변환
-    """
-    if val is None:
-        return None
-        
-    # - float 및 numpy floating 타입 정밀 처리
-    if isinstance(val, (float, np.floating)):
-        if math.isnan(val) or math.isinf(val):
-            return None
-        try:
-            # - 소수점 아래가 없는 실수 (예: 29.0) ➔ 정수 (29) 자동 캐스팅
-            if float(val).is_integer():
-                return int(val)
-        except (ValueError, TypeError):
-            pass
-            
-    if pd.isna(val):
-        return None
-        
-    if hasattr(val, "item"):  # numpy 타입 지원
-        try:
-            val_item = val.item()
-            if isinstance(val_item, float) and (math.isnan(val_item) or math.isinf(val_item)):
-                return None
-            try:
-                if float(val_item).is_integer():
-                    return int(val_item)
-            except:
-                pass
-            return val_item
-        except:
-            pass
-            
-    return val
 
 def upload_in_batches(
     supabase: Client, 
@@ -152,7 +119,7 @@ def upload_in_batches(
 ):
     """
     [대용량 벌크 업로드 파이프라인]
-    - 목적: 129개 컬럼 대용량 데이터를 메모리 에러와 속도 지연 없이 분할 적재
+    - 목적: ALLOWED_FEATURES 38개 컬럼 데이터를 메모리 에러와 속도 지연 없이 분할 적재
     - 방법: Chunk 단위 슬라이싱 및 Exponential Backoff 재시도 로직 적용
     """
     # - 테스트 모드 제어: pilot_mode 활성화 시 1개 청크(1,000행)만 적재하고 조기 종료
@@ -175,11 +142,7 @@ def upload_in_batches(
         
         # - 데이터 슬라이싱 및 사전형(Dict) 리스트 변환 후 JSON 호환성 정제 (_safe_none)
         chunk_df = df_target.iloc[start_idx:end_idx]
-        raw_records = chunk_df.to_dict(orient="records")
-        chunk_data = []
-        for row in raw_records:
-            clean_row = {k: _safe_none(v) for k, v in row.items()}
-            chunk_data.append(clean_row)
+        chunk_data = chunk_df.to_dict(orient="records")
         
         # - 재시도 로직 설정: 네트워크 차단 및 레이트 리밋 대비 최대 5회 재시도
         max_retries = 5
@@ -189,8 +152,19 @@ def upload_in_batches(
         
         while attempt < max_retries:
             try:
-                # - Supabase API 호출: bulk insert 실행
-                supabase.table(table_name).insert(chunk_data).execute()
+                # - Supabase API 호출: upsert 실행 (PK 중복 시 덮어쓰기)
+                # - [수정] insert → upsert 전환
+                # - 전환 이유:
+                #   insert는 PK 중복 시 에러 발생 → 재적재 시 중단됨
+                #   upsert는 PK 중복 시 기존 행 업데이트 → 멱등성 확보
+                #   멱등성: 몇 번 실행해도 같은 결과 보장
+                #           중간에 끊겨도 다시 실행하면 이어서 처리 가능
+                # - on_conflict: PK 컬럼(game_pk, at_bat_number, pitch_number) 기준
+                #   충돌 감지 → 동일 투구 데이터 중복 적재 자동 방어
+                supabase.table(table_name).upsert(
+                    chunk_data,
+                    on_conflict='game_pk,at_bat_number,pitch_number'
+                ).execute()
                 success = True
                 break
             except Exception as e:
@@ -242,12 +216,15 @@ if __name__ == "__main__":
     # - 2. 마스터 데이터 준비
     master_df = prepare_master_dataset()
     
-    # - 3. 파일럿 업로드 구동 (검증 목적 1개 청크 테스트)
-    # - 실전 업로드 시 pilot_mode=False로 호출 권장
+    # - 3. 전체 데이터 업로드 (144만 행 전체 적재 — enrichment 조회 정상화 목적)
     upload_in_batches(
         supabase=supabase_client,
         df=master_df,
+        # - Supabase에 데이터를 올릴 대상 테이블 이름
         table_name="statcast_bat_tracking",
+        # - 한 번에 올리는 행 수: 1,000행씩 나눠서 업로드 (메모리 초과 방지)
         chunk_size=1000,
-        pilot_mode=True
+        # - False: 144만 행 전체 업로드 (True였을 때는 1,000행만 테스트 업로드)
+        # - 주의: Supabase 대시보드에서 기존 1,000행 삭제 후 실행할 것 (중복 에러 방지)
+        pilot_mode=False
     )
