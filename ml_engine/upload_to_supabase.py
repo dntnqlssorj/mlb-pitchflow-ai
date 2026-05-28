@@ -12,7 +12,11 @@ from ml_engine.feature_engineering import (
     build_season_baseline,
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
-    integrate_fielding_oaa
+    integrate_fielding_oaa,
+    add_situational_features,
+    add_pitch_sequence_features,
+    add_pitcher_repertoire_features,
+    add_pitcher_situation_features,
 )
 from ml_engine.config import ALLOWED_FEATURES
 
@@ -62,6 +66,10 @@ def prepare_master_dataset() -> pd.DataFrame:
     df = calculate_pitcher_stamina_decay(bat_df, season_baseline_df, baseline_pitches=15)
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
+    df = add_situational_features(df)
+    df = add_pitch_sequence_features(df)
+    df = add_pitcher_repertoire_features(df)
+    df = add_pitcher_situation_features(df)
     
     # - [수정 3] NaN/inf/-inf → None 변환 (replace 방식)
     # - apply()로 None 반환해도 to_dict() 시 pandas가 numpy float64 nan으로 되돌려버림
@@ -93,6 +101,9 @@ def prepare_master_dataset() -> pd.DataFrame:
         "fielder_6", "fielder_7", "fielder_8", "fielder_9",
         # 그룹 G: PK 식별자
         "game_pk", "at_bat_number", "pitch_number",
+        # 신규 정수 타입 피처
+        "count_situation", "matchup_type",
+        "prev_pitch_1", "prev_pitch_2", "prev_pitch_3",
     ]
     for col in bigint_cols:
         if col in df.columns:
@@ -202,8 +213,19 @@ def upload_in_batches(
         
         for attempt in range(max_retries):
             try:
-                # - Supabase API 호출: bulk insert 실행
-                supabase.table(table_name).insert(chunk_data).execute()
+                # - Supabase API 호출: upsert 실행 (PK 중복 시 덮어쓰기)
+                # - [수정] insert → upsert 전환
+                # - 전환 이유:
+                #   insert는 PK 중복 시 에러 발생 → 재적재 시 중단됨
+                #   upsert는 PK 중복 시 기존 행 업데이트 → 멱등성 확보
+                #   멱등성: 몇 번 실행해도 같은 결과 보장
+                #           중간에 끊겨도 다시 실행하면 이어서 처리 가능
+                # - on_conflict: PK 컬럼(game_pk, at_bat_number, pitch_number) 기준
+                #   충돌 감지 → 동일 투구 데이터 중복 적재 자동 방어
+                supabase.table(table_name).upsert(
+                    chunk_data,
+                    on_conflict='game_pk,at_bat_number,pitch_number'
+                ).execute()
                 success = True
                 break
             except Exception as e:

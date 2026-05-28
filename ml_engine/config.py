@@ -66,7 +66,6 @@ ALLOWED_FEATURES: List[str] = [
     # 그룹 E: 포수 식별자 (블로킹 파생 전면 제거, ID만 유지)
     'fielder_2',
 
-<<<<<<< Updated upstream
     # 그룹 F: Pitch Sequence (신규)
     'prev_pitch_1',
     'prev_pitch_2',
@@ -96,20 +95,9 @@ ALLOWED_FEATURES: List[str] = [
     # vs 우타
     'pitcher_ff_pct_vsR', 'pitcher_sl_pct_vsR', 'pitcher_ch_pct_vsR',
     'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
-]
-# ALLOWED_FEATURES 총 68개
-=======
-    # 그룹 F: 야수 OAA 도메인 — 9개
-    'fielder_3',
-    'fielder_4',
-    'fielder_5',
-    'fielder_6',
-    'fielder_7',
-    'fielder_8',
-    'fielder_9',
-    'team_oaa_total',
-    'fielding_risk_index',
 
+# ALLOWED_FEATURES 총 68개
+    
     # ===========================================================================
     # [추가] 그룹 G: PK 식별자 — 3개
     # 추가 이유: statcast_bat_tracking 테이블의 PRIMARY KEY 구성 컬럼
@@ -124,8 +112,7 @@ ALLOWED_FEATURES: List[str] = [
     'at_bat_number',
     'pitch_number',
 ]
-# ALLOWED_FEATURES 총 41개 (38개 피처 + 3개 PK 식별자)
->>>>>>> Stashed changes
+# ALLOWED_FEATURES 총 71개 (68개 피처 + 3개 PK 식별자)
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
