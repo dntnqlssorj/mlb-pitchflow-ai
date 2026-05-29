@@ -62,58 +62,8 @@
     },
     {
       "parameters": {
-        "resource": "row",
-        "operation": "getAll",
-        "tableId": "statcast_bat_tracking",
-        "returnAll": false,
-        "limit": 50,
-        "filterType": "string",
-        "filterString": "=pitcher=eq.{{ $('Webhook Trigger').first().json.pitcher_id }}&order=game_pk.desc"
-      },
-      "id": "node-003-supabase-pitcher",
-      "name": "투수 히스토리 조회",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [560, 300],
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "활용 인덱스: idx_bat_tracking_pitcher_year\n최근 50투구 기준 구종 히스토리 수집\nfilter: $('Webhook Trigger').first() → 항상 webhook 원본 참조\n\n⚠️ 이 노드는 50개 row items를 출력함\n   Node 4~7은 executeOnce: true 설정으로 1회만 실행 보장\n   (AI Agent 중복 호출 방지)\n※ Supabase 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
-        "resource": "row",
-        "operation": "getAll",
-        "tableId": "statcast_bat_tracking",
-        "returnAll": false,
-        "limit": 50,
-        "filterType": "string",
-        "filterString": "=batter=eq.{{ $('Webhook Trigger').first().json.batter_id }}&order=game_pk.desc"
-      },
-      "id": "node-004-supabase-batter",
-      "name": "타자 약점 조회",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "typeVersion": 1,
-      "position": [840, 300],
-      "executeOnce": true,
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "활용 인덱스: idx_bat_tracking_batter_year\n최근 50타석 기준 타자 약점 데이터 수집\nfilter: $('Webhook Trigger').first() → 항상 webhook 원본 참조\n\nexecuteOnce: true → Node 3의 50개 items 수신해도 1회만 실행\n   → AI Agent 1회 호출 보장 (비용 최적화)\n※ Supabase 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
         "promptType": "define",
-        "text": "=## 구종 예측 복기 분석 요청\n\n### 경기 상황\n- 투수 ID: {{ $('Webhook Trigger').first().json.pitcher_id }}\n- 타자 ID: {{ $('Webhook Trigger').first().json.batter_id }}\n- 이닝: {{ $('Webhook Trigger').first().json.inning }}\n- 볼카운트: {{ $('Webhook Trigger').first().json.balls }}볼 {{ $('Webhook Trigger').first().json.strikes }}스트라이크\n- 아웃: {{ $('Webhook Trigger').first().json.outs }}아웃\n- 주자: 1루={{ $('Webhook Trigger').first().json.on_1b ?? 0 }}, 2루={{ $('Webhook Trigger').first().json.on_2b ?? 0 }}, 3루={{ $('Webhook Trigger').first().json.on_3b ?? 0 }}\n- 실제 투구 (복기): {{ $('Webhook Trigger').first().json.actual_pitch ?? 'null (입력 안 됨)' }}\n\n### 모델 예측 결과\n- 예측 구종: {{ $('FastAPI 투구 예측').first().json.predicted_type }}\n- 구종별 확률 분포:\n{{ JSON.stringify($('FastAPI 투구 예측').first().json.probabilities, null, 2) }}\n\n### 투수 최근 50투구 히스토리\n{{ JSON.stringify($('투수 히스토리 조회').all().map(i => i.json), null, 2) }}\n\n### 타자 최근 50타석 데이터\n{{ JSON.stringify($('타자 약점 조회').all().map(i => i.json), null, 2) }}\n\n위 데이터를 종합하여 구종 예측 복기 해설 JSON을 반환해라.\nactual_pitch가 null이면 vs_actual은 반드시 null로 반환해라.",
+        "text": "=## 구종 예측 복기 분석 요청\n\n### 경기 상황\n- 투수 ID: {{ $('Webhook Trigger').first().json.pitcher_id }}\n- 타자 ID: {{ $('Webhook Trigger').first().json.batter_id }}\n- 이닝: {{ $('Webhook Trigger').first().json.inning }}\n- 볼카운트: {{ $('Webhook Trigger').first().json.balls }}볼 {{ $('Webhook Trigger').first().json.strikes }}스트라이크\n- 아웃: {{ $('Webhook Trigger').first().json.outs }}아웃\n- 주자: 1루={{ $('Webhook Trigger').first().json.on_1b ?? 0 }}, 2루={{ $('Webhook Trigger').first().json.on_2b ?? 0 }}, 3루={{ $('Webhook Trigger').first().json.on_3b ?? 0 }}\n- 실제 투구 (복기): {{ $('Webhook Trigger').first().json.actual_pitch ?? 'null (입력 안 됨)' }}\n\n### 모델 예측 결과\n- 예측 구종: {{ $('FastAPI 투구 예측').first().json.predicted_type }}\n- 구종별 확률 분포:\n{{ JSON.stringify($('FastAPI 투구 예측').first().json.probabilities, null, 2) }}\n\n### 히스토리 데이터\n데이터베이스 미연결 상태 — 예측 확률 분포와 경기 상황만으로 분석해라.\n\n위 데이터를 종합하여 구종 예측 복기 해설 JSON을 반환해라.\nactual_pitch가 null이면 vs_actual은 반드시 null로 반환해라.",
         "options": {
           "systemMessage": "너는 MLB 투구 전술 복기 분석 전문가다.\n구종 예측 확률, 투수 히스토리,\n타자 약점 데이터를 종합하여 해설해라.\nactual_pitch가 있으면 예측과 실제를 비교해라.\nactual_pitch가 null이면 vs_actual은 null로 반환해라.\n추측하지 마라. 데이터 기반으로만 분석해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"vs_actual\": \"string | null\"\n}"
         }
@@ -192,16 +142,6 @@
       ]
     },
     "FastAPI 투구 예측": {
-      "main": [
-        [{ "node": "투수 히스토리 조회", "type": "main", "index": 0 }]
-      ]
-    },
-    "투수 히스토리 조회": {
-      "main": [
-        [{ "node": "타자 약점 조회", "type": "main", "index": 0 }]
-      ]
-    },
-    "타자 약점 조회": {
       "main": [
         [{ "node": "복기 해설 AI Agent", "type": "main", "index": 0 }]
       ]

@@ -165,66 +165,6 @@
     },
     {
       "parameters": {
-        "resource": "row",
-        "operation": "upsert",
-        "tableId": "prediction_log",
-        "fieldsUi": {
-          "fieldValues": [
-            {
-              "fieldId": "game_pk",
-              "fieldValue": "={{ $('투구 diff 감지').item.json.game_pk }}"
-            },
-            {
-              "fieldId": "at_bat_number",
-              "fieldValue": "={{ $('투구 diff 감지').item.json.at_bat_number }}"
-            },
-            {
-              "fieldId": "pitch_number",
-              "fieldValue": "={{ $('투구 diff 감지').item.json.pitch_number }}"
-            },
-            {
-              "fieldId": "predicted_type",
-              "fieldValue": "={{ $('FastAPI 투구 예측').item.json.predicted_type }}"
-            },
-            {
-              "fieldId": "probability_json",
-              "fieldValue": "={{ JSON.stringify($('FastAPI 투구 예측').item.json.probabilities) }}"
-            },
-            {
-              "fieldId": "ai_commentary",
-              "fieldValue": "={{ JSON.parse($json.output).commentary }}"
-            },
-            {
-              "fieldId": "ai_reasoning",
-              "fieldValue": "={{ JSON.parse($json.output).reasoning }}"
-            },
-            {
-              "fieldId": "ai_confidence",
-              "fieldValue": "={{ JSON.parse($json.output).confidence }}"
-            },
-            {
-              "fieldId": "inference_ts",
-              "fieldValue": "={{ $now.toISO() }}"
-            }
-          ]
-        }
-      },
-      "id": "node-007-supabase-log",
-      "name": "prediction_log 저장",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [1680, 300],
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "prediction_log 테이블 upsert\nPK: (game_pk, at_bat_number, pitch_number)\n저장: predicted_type, probability_json, ai_commentary, ai_reasoning, ai_confidence, inference_ts\n※ Supabase 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
         "method": "POST",
         "url": "={{ $vars.frontend_webhook_url }}",
         "sendBody": true,
@@ -238,9 +178,9 @@
           "count":          "={{ $('투구 diff 감지').item.json.balls }}B-{{ $('투구 diff 감지').item.json.strikes }}S",
           "predicted_type": "={{ $('FastAPI 투구 예측').item.json.predicted_type }}",
           "probabilities":  "={{ $('FastAPI 투구 예측').item.json.probabilities }}",
-          "commentary":     "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).commentary }}",
-          "reasoning":      "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).reasoning }}",
-          "confidence":     "={{ JSON.parse($('전술 해설 AI Agent').item.json.output).confidence }}",
+          "commentary":     "={{ JSON.parse($json.output).commentary }}",
+          "reasoning":      "={{ JSON.parse($json.output).reasoning }}",
+          "confidence":     "={{ JSON.parse($json.output).confidence }}",
           "inference_ts":   "={{ $now.toISO() }}"
         },
         "options": {
@@ -324,11 +264,6 @@
       ]
     },
     "전술 해설 AI Agent": {
-      "main": [
-        [{ "node": "prediction_log 저장", "type": "main", "index": 0 }]
-      ]
-    },
-    "prediction_log 저장": {
       "main": [
         [{ "node": "프론트엔드 Push", "type": "main", "index": 0 }]
       ]

@@ -82,11 +82,9 @@
         "contentType": "json",
         "body": "={{ JSON.stringify([{ game_pk: $json.game_pk, at_bat_number: $json.at_bat_number, pitch_number: $json.pitch_number, pitch_type: $json.pitch_type, game_year: $json.game_year, pitcher: $json.pitcher, batter: $json.batter, balls: $json.balls, strikes: $json.strikes, outs_when_up: $json.outs_when_up, inning: $json.inning, on_1b: $json.on_1b, on_2b: $json.on_2b, on_3b: $json.on_3b }]) }}",
         "options": {
-          "response": {
-            "response": { "neverError": true }
-          },
-          "timeout": 10000
-        }
+          "response": { "neverError": true }
+        },
+        "timeout": 10000
       },
       "id": "node-004-supabase-upsert",
       "name": "statcast_bat_tracking upsert",
@@ -96,30 +94,7 @@
     },
     {
       "parameters": {
-        "resource": "row",
-        "operation": "getAll",
-        "tableId": "prediction_log",
-        "returnAll": true,
-        "filterType": "string",
-        "filterString": "=inference_ts=gte.{{ $now.minus({days: 1}).startOf('day').toISO() }}&inference_ts=lt.{{ $now.startOf('day').toISO() }}"
-      },
-      "id": "node-005-supabase-predlog",
-      "name": "prediction_log 조회",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [1120, 300],
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "당일 예측 로그 전체 수집\nfilter: inference_ts 기준 전날 하루분\n\n⚠️ Node 3이 N개 row items를 출력하므로 이 노드는 N번 실행됨\n   Node 6에서 $input.all() + Set 기반 중복 제거로 처리\n※ Supabase 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
-        "jsCode": "// ── Node 6: 예측 정확도 계산 + 드리프트 감지 ────────────────────────────────\n// Node 5가 N번 실행 → 동일 데이터 N세트 수신 → Set으로 중복 제거\nconst DRIFT_THRESHOLD = 0.40;\nconst today = $now.minus({ days: 1 }).format('YYYY-MM-DD');\n\n// ① prediction_log 중복 제거 (game_pk + at_bat_number + pitch_number 기준)\nconst seen = new Set();\nconst predictions = [];\nfor (const item of $input.all()) {\n  const p   = item.json;\n  const key = `${p.game_pk}-${p.at_bat_number}-${p.pitch_number}`;\n  if (!seen.has(key)) {\n    seen.add(key);\n    predictions.push(p);\n  }\n}\n\n// ② 실제 pitch_type — Node 3(투구 데이터 정제) 출력에서 참조\nconst actualMap = {};\nfor (const item of $('투구 데이터 정제').all()) {\n  const r = item.json;\n  if (r.game_pk && r.at_bat_number != null && r.pitch_number && r.pitch_type) {\n    actualMap[`${r.game_pk}-${r.at_bat_number}-${r.pitch_number}`] = r.pitch_type;\n  }\n}\n\n// ③ 구종별 정확도 집계\nlet correct = 0;\nlet total   = 0;\nconst pitchStats = {};\n\nfor (const pred of predictions) {\n  const key    = `${pred.game_pk}-${pred.at_bat_number}-${pred.pitch_number}`;\n  const actual = actualMap[key];\n  if (!actual) continue;\n\n  total++;\n  if (!pitchStats[actual]) pitchStats[actual] = { correct: 0, total: 0 };\n  pitchStats[actual].total++;\n\n  if (pred.predicted_type === actual) {\n    correct++;\n    pitchStats[actual].correct++;\n  }\n}\n\nconst accuracy = total > 0 ? correct / total : 0;\n\n// ④ 최저 정확도 구종 탐지 (최소 10투구 기준)\nlet worstType = 'N/A';\nlet worstAcc  = 1.0;\nfor (const [type, s] of Object.entries(pitchStats)) {\n  const typeAcc = s.total >= 10 ? s.correct / s.total : 1.0;\n  if (typeAcc < worstAcc) { worstAcc = typeAcc; worstType = type; }\n}\n\nconsole.log(`[${today}] Accuracy: ${(accuracy*100).toFixed(1)}% (${correct}/${total}) | Worst: ${worstType}(${(worstAcc*100).toFixed(1)}%) | Drift: ${accuracy < DRIFT_THRESHOLD}`);\n\nreturn [{\n  json: {\n    date:                today,\n    total_predictions:   total,\n    correct_predictions: correct,\n    accuracy:            accuracy,\n    accuracy_pct:        `${(accuracy * 100).toFixed(1)}%`,\n    worst_pitch_type:    worstType,\n    worst_pitch_acc:     worstAcc,\n    pitch_type_stats:    pitchStats,\n    drift_detected:      accuracy < DRIFT_THRESHOLD,\n    drift_threshold:     DRIFT_THRESHOLD\n  }\n}];"
+        "jsCode": "// prediction_log 미연결 상태 — 드리프트 감지 스킵\nconst today = new Date(Date.now() - 86400000).toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    date:                today,\n    total_predictions:   0,\n    correct_predictions: 0,\n    accuracy:            0,\n    accuracy_pct:        \"N/A (prediction_log 미연결)\",\n    worst_pitch_type:    \"N/A\",\n    worst_pitch_acc:     0,\n    pitch_type_stats:    {},\n    drift_detected:      false,\n    drift_threshold:     0.40\n  }\n}];"
       },
       "id": "node-006-code-accuracy",
       "name": "정확도 계산 및 드리프트 감지",
@@ -169,70 +144,6 @@
     },
     {
       "parameters": {
-        "resource": "row",
-        "operation": "upsert",
-        "tableId": "daily_report",
-        "fieldsUi": {
-          "fieldValues": [
-            {
-              "fieldId": "report_date",
-              "fieldValue": "={{ $('정확도 계산 및 드리프트 감지').item.json.date }}"
-            },
-            {
-              "fieldId": "total_predictions",
-              "fieldValue": "={{ $('정확도 계산 및 드리프트 감지').item.json.total_predictions }}"
-            },
-            {
-              "fieldId": "accuracy",
-              "fieldValue": "={{ $('정확도 계산 및 드리프트 감지').item.json.accuracy }}"
-            },
-            {
-              "fieldId": "worst_pitch_type",
-              "fieldValue": "={{ $('정확도 계산 및 드리프트 감지').item.json.worst_pitch_type }}"
-            },
-            {
-              "fieldId": "drift_detected",
-              "fieldValue": "={{ $('정확도 계산 및 드리프트 감지').item.json.drift_detected }}"
-            },
-            {
-              "fieldId": "ai_accuracy_summary",
-              "fieldValue": "={{ JSON.parse($json.output).accuracy_summary }}"
-            },
-            {
-              "fieldId": "ai_worst_pitch_type",
-              "fieldValue": "={{ JSON.parse($json.output).worst_pitch_type }}"
-            },
-            {
-              "fieldId": "ai_pattern_insight",
-              "fieldValue": "={{ JSON.parse($json.output).pattern_insight }}"
-            },
-            {
-              "fieldId": "ai_recommendation",
-              "fieldValue": "={{ JSON.parse($json.output).recommendation }}"
-            },
-            {
-              "fieldId": "created_at",
-              "fieldValue": "={{ $now.toISO() }}"
-            }
-          ]
-        }
-      },
-      "id": "node-008-supabase-report",
-      "name": "daily_report 저장",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [1960, 300],
-      "credentials": {
-        "supabaseApi": {
-          "id": "SUPABASE_CREDENTIAL_ID",
-          "name": "Supabase account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "daily_report 테이블 upsert\nPK: report_date\n저장: accuracy, drift_detected, AI 리포트 4개 필드\n※ Supabase 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
         "conditions": {
           "options": {
             "caseSensitive": true,
@@ -275,7 +186,7 @@
           "accuracy":        "={{ $('정확도 계산 및 드리프트 감지').item.json.accuracy }}",
           "drift_threshold": "={{ $('정확도 계산 및 드리프트 감지').item.json.drift_threshold }}",
           "worst_pitch":     "={{ $('정확도 계산 및 드리프트 감지').item.json.worst_pitch_type }}",
-          "ai_recommendation": "={{ JSON.parse($('성능 분석 AI Agent').item.json.output).recommendation }}",
+          "ai_recommendation": "={{ JSON.parse($json.output).recommendation }}",
           "triggered_at":    "={{ $now.toISO() }}"
         },
         "options": {
@@ -312,11 +223,6 @@
     },
     "statcast_bat_tracking upsert": {
       "main": [
-        [{ "node": "prediction_log 조회", "type": "main", "index": 0 }]
-      ]
-    },
-    "prediction_log 조회": {
-      "main": [
         [{ "node": "정확도 계산 및 드리프트 감지", "type": "main", "index": 0 }]
       ]
     },
@@ -331,11 +237,6 @@
       ]
     },
     "성능 분석 AI Agent": {
-      "main": [
-        [{ "node": "daily_report 저장", "type": "main", "index": 0 }]
-      ]
-    },
-    "daily_report 저장": {
       "main": [
         [{ "node": "드리프트 임계값 초과", "type": "main", "index": 0 }]
       ]
