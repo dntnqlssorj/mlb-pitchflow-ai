@@ -301,5 +301,5 @@ if __name__ == "__main__":
         chunk_size=1000,
         # - True: 1,000행만 테스트 업로드 (실전 업로드 시 False)
         # - 주의: Supabase 대시보드에서 기존 1,000행 삭제 후 실행할 것 (중복 에러 방지)
-        pilot_mode=True
+        pilot_mode=False
     )
