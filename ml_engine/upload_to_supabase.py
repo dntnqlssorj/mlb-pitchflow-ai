@@ -142,6 +142,43 @@ def prepare_master_dataset() -> pd.DataFrame:
     print(f"✅ 마스터 데이터 가공 완료: {df.shape[0]} 행, {df.shape[1]} 개 컬럼")
     return df
 
+
+def _safe_none(v):
+    """
+    [데이터 정제 유틸리티]
+    - 1단계: pd.isna() → NaN, None, pd.NA 처리
+    - 2단계: inf/-inf → None (pd.isna가 False로 통과시킴)
+    - 3단계: numpy float32/float16 → Python float
+    - 4단계: numpy 정수 타입 → Python int
+    - 5단계: numpy bool → Python bool
+    - 6단계: datetime/Timestamp → 문자열
+    """
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(v, float) and (v == float('inf') or v == float('-inf')):
+        return None
+
+    if isinstance(v, (np.float32, np.float16)):
+        return float(v)
+
+    if isinstance(v, (np.int64, np.int32, np.int16, np.int8,
+                      np.uint64, np.uint32, np.uint16, np.uint8)):
+        return int(v)
+
+    if isinstance(v, np.bool_):
+        return bool(v)
+
+    import datetime
+    if isinstance(v, (datetime.date, datetime.datetime, pd.Timestamp)):
+        return str(v)
+
+    return v
+
+
 def upload_in_batches(
     supabase: Client, 
     df: pd.DataFrame, 
