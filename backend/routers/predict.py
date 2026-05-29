@@ -318,3 +318,31 @@ def predict_pitch(
         "enrichment_latency_ms": enrichment_latency_ms,
         "enrichment_sources":   enrichment_sources,
     }
+
+
+@router.post(
+    "/cache/rebuild",
+    summary="enrichment pkl 캐시 재빌드",
+    tags=["Cache"],
+)
+def rebuild_cache():
+    """
+    [캐시 재빌드 엔드포인트]
+    - build_cache.py의 build_enrichment_cache()를 서버 내에서 직접 호출
+    - n8n post_game 워크플로우에서 매일 새벽 자동 호출
+    - 수동 갱신 시에도 사용 가능
+    """
+    try:
+        from ml_engine.build_cache import build_enrichment_cache
+        build_enrichment_cache()
+
+        # 메모리 캐시 초기화 (다음 요청 시 새 pkl 로드)
+        from backend.services.enrichment import _cache
+        _cache.clear()
+
+        return {
+            "status": "success",
+            "message": "enrichment pkl 캐시 재빌드 완료",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"캐시 재빌드 실패: {str(e)}")

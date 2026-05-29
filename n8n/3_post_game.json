@@ -16,7 +16,10 @@
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 300],
+      "position": [
+        0,
+        300
+      ],
       "notesInFlow": true,
       "notes": "매일 새벽 3시 ET 실행\n경기 종료 후 3~4시간 뒤 → Baseball Savant 데이터 게시 시점 대응\n복수 경기 시간대(1PM·4PM·7PM)의 가장 늦은 종료 기준"
     },
@@ -27,12 +30,30 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "all",            "value": "true" },
-            { "name": "type",           "value": "details" },
-            { "name": "player_type",    "value": "pitcher" },
-            { "name": "game_type",      "value": "R" },
-            { "name": "game_date_gt",   "value": "={{ $now.minus({days: 1}).format('YYYY-MM-DD') }}" },
-            { "name": "game_date_lt",   "value": "={{ $now.format('YYYY-MM-DD') }}" }
+            {
+              "name": "all",
+              "value": "true"
+            },
+            {
+              "name": "type",
+              "value": "details"
+            },
+            {
+              "name": "player_type",
+              "value": "pitcher"
+            },
+            {
+              "name": "game_type",
+              "value": "R"
+            },
+            {
+              "name": "game_date_gt",
+              "value": "={{ $now.minus({days: 1}).format('YYYY-MM-DD') }}"
+            },
+            {
+              "name": "game_date_lt",
+              "value": "={{ $now.format('YYYY-MM-DD') }}"
+            }
           ]
         },
         "options": {
@@ -49,7 +70,10 @@
       "name": "Baseball Savant 투구 데이터",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 300],
+      "position": [
+        280,
+        300
+      ],
       "notesInFlow": true,
       "notes": "Baseball Savant 공개 CSV 엔드포인트 (인증 불필요)\npybaseball이 사용하는 동일 엔드포인트\n전날 정규시즌(R) 전체 투구 데이터 수집\ntimeout: 60s (대용량 CSV 대응)"
     },
@@ -61,7 +85,10 @@
       "name": "투구 데이터 정제",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [560, 300],
+      "position": [
+        560,
+        300
+      ],
       "notesInFlow": true,
       "notes": "누수 피처 51개 전체 드롭 (직접 누수 29 + 결과 누수 22)\n타입 정규화: INT / FLOAT / VARCHAR\n(game_pk, at_bat_number, pitch_number) 복합키 검증\none item per row 출력 → Node 4 행별 upsert\n※ 프로덕션: 이 노드 뒤에 SplitInBatches(1000행) 추가 권장"
     },
@@ -72,17 +99,31 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey",        "value": "={{ $vars.supabase_anon_key }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $vars.supabase_anon_key }}" },
-            { "name": "Content-Type",  "value": "application/json" },
-            { "name": "Prefer",        "value": "resolution=ignore-duplicates,return=minimal" }
+            {
+              "name": "apikey",
+              "value": "={{ $vars.supabase_anon_key }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.supabase_anon_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=ignore-duplicates,return=minimal"
+            }
           ]
         },
         "sendBody": true,
         "contentType": "json",
         "body": "={{ JSON.stringify([{ game_pk: $json.game_pk, at_bat_number: $json.at_bat_number, pitch_number: $json.pitch_number, pitch_type: $json.pitch_type, game_year: $json.game_year, pitcher: $json.pitcher, batter: $json.batter, balls: $json.balls, strikes: $json.strikes, outs_when_up: $json.outs_when_up, inning: $json.inning, on_1b: $json.on_1b, on_2b: $json.on_2b, on_3b: $json.on_3b }]) }}",
         "options": {
-          "response": { "neverError": true }
+          "response": {
+            "neverError": true
+          }
         },
         "timeout": 10000
       },
@@ -90,7 +131,10 @@
       "name": "statcast_bat_tracking upsert",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [840, 300]
+      "position": [
+        840,
+        300
+      ]
     },
     {
       "parameters": {
@@ -100,7 +144,10 @@
       "name": "정확도 계산 및 드리프트 감지",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1400, 300],
+      "position": [
+        1400,
+        300
+      ],
       "notesInFlow": true,
       "notes": "$input.all() + Set으로 중복 제거 후 단일 정확도 계산\n실제 pitch_type: $('투구 데이터 정제').all() 참조\n드리프트 임계값: accuracy < 0.40\nworstType: 최소 10투구 이상인 구종 중 최저 정확도"
     },
@@ -116,7 +163,10 @@
       "name": "성능 분석 AI Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1680, 300],
+      "position": [
+        1680,
+        300
+      ],
       "notesInFlow": true,
       "notes": "Model: claude-sonnet-4-20250514 (하위 노드로 연결)\n구종별 정확도 통계 → 성능 리포트 JSON\n출력: { accuracy_summary, worst_pitch_type, pattern_insight, recommendation }"
     },
@@ -132,7 +182,10 @@
       "name": "Claude Sonnet",
       "type": "@n8n/n8n-nodes-langchain.lmAnthropicChatModel",
       "typeVersion": 1.3,
-      "position": [1680, 540],
+      "position": [
+        1680,
+        540
+      ],
       "credentials": {
         "anthropicApi": {
           "id": "ANTHROPIC_CREDENTIAL_ID",
@@ -169,7 +222,10 @@
       "name": "드리프트 임계값 초과",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [2240, 300],
+      "position": [
+        2240,
+        300
+      ],
       "notesInFlow": true,
       "notes": "Rolling 7일 accuracy < 0.40 감지 시 TRUE\nTRUE  → Node 10: 재학습 트리거 발행\nFALSE → 정상 종료 (다음 경기일까지 대기)"
     },
@@ -180,18 +236,20 @@
         "sendBody": true,
         "contentType": "json",
         "body": {
-          "event":           "retrain_triggered",
-          "trigger_reason":  "drift_detected",
-          "report_date":     "={{ $('정확도 계산 및 드리프트 감지').item.json.date }}",
-          "accuracy":        "={{ $('정확도 계산 및 드리프트 감지').item.json.accuracy }}",
+          "event": "retrain_triggered",
+          "trigger_reason": "drift_detected",
+          "report_date": "={{ $('정확도 계산 및 드리프트 감지').item.json.date }}",
+          "accuracy": "={{ $('정확도 계산 및 드리프트 감지').item.json.accuracy }}",
           "drift_threshold": "={{ $('정확도 계산 및 드리프트 감지').item.json.drift_threshold }}",
-          "worst_pitch":     "={{ $('정확도 계산 및 드리프트 감지').item.json.worst_pitch_type }}",
+          "worst_pitch": "={{ $('정확도 계산 및 드리프트 감지').item.json.worst_pitch_type }}",
           "ai_recommendation": "={{ JSON.parse($json.output).recommendation }}",
-          "triggered_at":    "={{ $now.toISO() }}"
+          "triggered_at": "={{ $now.toISO() }}"
         },
         "options": {
           "response": {
-            "response": { "neverError": true }
+            "response": {
+              "neverError": true
+            }
           },
           "timeout": 10000
         }
@@ -200,51 +258,143 @@
       "name": "재학습 트리거 발행",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2520, 160],
+      "position": [
+        2520,
+        160
+      ],
       "notesInFlow": true,
       "notes": "POST {mlops_trigger_url}\ndrift_detected=true 일 때만 실행\n페이로드: 날짜, 정확도, 임계값, 최저 구종, AI 권고사항\nn8n 워크플로우 변수 설정 필요:\n  mlops_trigger_url = 재학습 파이프라인 수신 URL"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.fastapi_base_url }}/predict/cache/rebuild",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 300000
+        }
+      },
+      "id": "node-011-cache-rebuild",
+      "name": "enrichment 캐시 재빌드",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2520,
+        440
+      ],
+      "notesInFlow": true,
+      "notes": "매일 새벽 3시 post_game 완료 후 pkl 캐시 자동 갱신\nFastAPI /cache/rebuild 엔드포인트 호출\n드리프트 감지 여부와 무관하게 항상 실행"
     }
   ],
   "connections": {
     "Schedule Trigger": {
       "main": [
-        [{ "node": "Baseball Savant 투구 데이터", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Baseball Savant 투구 데이터",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Baseball Savant 투구 데이터": {
       "main": [
-        [{ "node": "투구 데이터 정제", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "투구 데이터 정제",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "투구 데이터 정제": {
       "main": [
-        [{ "node": "statcast_bat_tracking upsert", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "statcast_bat_tracking upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "statcast_bat_tracking upsert": {
       "main": [
-        [{ "node": "정확도 계산 및 드리프트 감지", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "정확도 계산 및 드리프트 감지",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "정확도 계산 및 드리프트 감지": {
       "main": [
-        [{ "node": "성능 분석 AI Agent", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "성능 분석 AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Claude Sonnet": {
       "ai_languageModel": [
-        [{ "node": "성능 분석 AI Agent", "type": "ai_languageModel", "index": 0 }]
+        [
+          {
+            "node": "성능 분석 AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
       ]
     },
     "성능 분석 AI Agent": {
       "main": [
-        [{ "node": "드리프트 임계값 초과", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "드리프트 임계값 초과",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "드리프트 임계값 초과": {
       "main": [
-        [{ "node": "재학습 트리거 발행", "type": "main", "index": 0 }],
-        []
+        [
+          {
+            "node": "재학습 트리거 발행",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "enrichment 캐시 재빌드",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "재학습 트리거 발행": {
+      "main": [
+        [
+          {
+            "node": "enrichment 캐시 재빌드",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
@@ -258,9 +408,17 @@
   },
   "id": "pitchflow-post-game-v1",
   "tags": [
-    { "name": "MLB" },
-    { "name": "post-game" },
-    { "name": "mlops" },
-    { "name": "supabase" }
+    {
+      "name": "MLB"
+    },
+    {
+      "name": "post-game"
+    },
+    {
+      "name": "mlops"
+    },
+    {
+      "name": "supabase"
+    }
   ]
 }
