@@ -8,17 +8,22 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 from ml_engine.datasets import get_clean_datasets
+# ===========================================================================
+# [수정 1] import 추가
+# 추가 이유: 팀원 버전에 신규 피처 생성 함수 4개가 누락되어 있었음
+#            → upload 시 신규 피처 컬럼이 생성되지 않아 28개만 적재되는 문제 발생
+# ===========================================================================
 from ml_engine.feature_engineering import (
     build_season_baseline,
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
     integrate_fielding_oaa,
-    add_situational_features,
-    add_pitch_sequence_features,
-    add_pitcher_repertoire_features,
-    add_pitcher_situation_features,
+    add_situational_features,        # [추가] count_situation, matchup_type 생성
+    add_pitch_sequence_features,     # [추가] prev_pitch_1/2/3 생성
+    add_pitcher_repertoire_features, # [추가] pitcher_ff_pct 등 6개 생성
+    add_pitcher_situation_features,  # [추가] pitcher_ff_pct_ahead 등 30개 생성
 )
-from ml_engine.config import ALLOWED_FEATURES, LABEL_COL
+from ml_engine.config import ALLOWED_FEATURES, LABEL_COL  # [추가] LABEL_COL 추가
 
 # - 환경 변수 로드: .env 파일 자동 감지 및 로드
 load_dotenv()
@@ -60,15 +65,30 @@ def prepare_master_dataset() -> pd.DataFrame:
     datasets = get_clean_datasets()
     bat_df = datasets['bat_tracking']
     
-    # - 도메인 피처 통합: feature_engineering.py 연동
-    season_baseline_df = build_season_baseline(bat_df)
+# ===========================================================================
+# [수정 2] 파이프라인 수정
+# 수정 이유 1: 팀원 버전의 calculate_pitcher_stamina_decay() 호출이
+#              옛날 시그니처(season_baseline_df 파라미터 없음)를 사용하고 있었음
+#              → TypeError: missing 1 required positional argument 에러 발생
+# 수정 이유 2: 신규 피처 생성 함수 4개가 파이프라인에 없었음
+#              → ALLOWED_FEATURES 71개 중 43개가 생성되지 않아 누락
+# 수정 이유 3: stand 컬럼이 문자열(R/L) 그대로 적재되면 DB BIGINT 타입 에러 발생
+# ===========================================================================
+
+    # - 샘플링 없이 전체 데이터 기준으로 시즌 평균 구속/회전수 사전 산출 (누수 방지)
+    season_baseline_df = build_season_baseline(bat_df)  # [추가]
     df = calculate_pitcher_stamina_decay(bat_df, season_baseline_df, baseline_pitches=15)
+    #                                          ^^^^^^^^^^^^^^^^^ [수정] 파라미터 추가
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
-    df = add_pitch_sequence_features(df)
-    df = add_pitcher_repertoire_features(df)
-    df = add_situational_features(df)
-    df = add_pitcher_situation_features(df)
+    df = add_pitch_sequence_features(df)     # [추가]
+    df = add_pitcher_repertoire_features(df) # [추가]
+    df = add_situational_features(df)        # [추가]
+    df = add_pitcher_situation_features(df)  # [추가] 가장 무거운 연산, 시간 소요
+
+    # - [추가] stand 컬럼 수치 인코딩 (R=0, L=1)
+    # - 이유: stand='R'/'L' 문자열이 DB BIGINT 컬럼에 적재되면 타입 에러 발생
+    #         bigint_cols 변환 전에 먼저 수치화 필요
     if 'stand' in df.columns:
         df['stand'] = df['stand'].map({'R': 0, 'L': 1}).fillna(0).astype(int)
     
@@ -155,6 +175,12 @@ def upload_in_batches(
         # - 데이터 슬라이싱 및 사전형(Dict) 리스트 변환 후 JSON 호환성 정제 (_safe_none)
         chunk_df = df_target.iloc[start_idx:end_idx]
         chunk_data = chunk_df.to_dict(orient="records")
+        # - [수정] to_dict() 후 NaN/inf/pd.NA → None 강제 변환
+        # - 이유: to_dict() 호출 시 pandas가 numpy float64 nan으로 되돌려버림
+        #         딕셔너리 단계에서 _safe_none()으로 강제 변환 필요
+        #         prepare_master_dataset()에서 df.where(pd.notnull(df), None)로
+        #         처리해도 to_dict() 후 nan이 복원되는 pandas 특성 때문에 필수
+        chunk_data = [{k: _safe_none(v) for k, v in record.items()} for record in chunk_data]
         
         # - 재시도 로직 설정: 네트워크 차단 및 레이트 리밋 대비 최대 5회 재시도
         max_retries = 5
