@@ -236,7 +236,7 @@ if __name__ == "__main__":
         table_name="statcast_bat_tracking",
         # - 한 번에 올리는 행 수: 1,000행씩 나눠서 업로드 (메모리 초과 방지)
         chunk_size=1000,
-        # - False: 144만 행 전체 업로드 (True였을 때는 1,000행만 테스트 업로드)
+        # - True: 1,000행만 테스트 업로드 (실전 업로드 시 False)
         # - 주의: Supabase 대시보드에서 기존 1,000행 삭제 후 실행할 것 (중복 에러 방지)
-        pilot_mode=False
+        pilot_mode=True
     )
