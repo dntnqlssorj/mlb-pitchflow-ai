@@ -12,8 +12,13 @@ from ml_engine.feature_engineering import (
     build_season_baseline,
     calculate_pitcher_stamina_decay,
     integrate_catcher_blocking,
-    integrate_fielding_oaa
+    integrate_fielding_oaa,
+    add_situational_features,
+    add_pitch_sequence_features,
+    add_pitcher_repertoire_features,
+    add_pitcher_situation_features,
 )
+from ml_engine.config import ALLOWED_FEATURES, LABEL_COL
 
 # - 환경 변수 로드: .env 파일 자동 감지 및 로드
 load_dotenv()
@@ -56,9 +61,16 @@ def prepare_master_dataset() -> pd.DataFrame:
     bat_df = datasets['bat_tracking']
     
     # - 도메인 피처 통합: feature_engineering.py 연동
-    df = calculate_pitcher_stamina_decay(bat_df, baseline_pitches=15)
+    season_baseline_df = build_season_baseline(bat_df)
+    df = calculate_pitcher_stamina_decay(bat_df, season_baseline_df, baseline_pitches=15)
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
+    df = add_pitch_sequence_features(df)
+    df = add_pitcher_repertoire_features(df)
+    df = add_situational_features(df)
+    df = add_pitcher_situation_features(df)
+    if 'stand' in df.columns:
+        df['stand'] = df['stand'].map({'R': 0, 'L': 1}).fillna(0).astype(int)
     
     # - 데이터 정제: JSON 직렬화 및 DB 호환을 위한 NaN -> None(NULL) 변환
     # - 특성: Pandas NaN은 JSON 업로드 시 에러를 유발하므로 float/int/object 구분 없이 처리
