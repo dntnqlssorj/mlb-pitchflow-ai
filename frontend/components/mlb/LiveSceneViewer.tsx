@@ -36,9 +36,9 @@ function LiveSceneViewerInner({
     sceneRef.current = scene;
 
     // Calibrated Camera
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(0, 2.0, 6);
-    camera.lookAt(0, 1.0, -3);
+    const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1000);
+    camera.position.set(0, 1.2, 9.5);
+    camera.lookAt(0, 1.0, 0);
 
     const renderer = new THREE.WebGLRenderer({
       canvas: canvas,
@@ -92,7 +92,7 @@ function LiveSceneViewerInner({
     // Strike Zone Box
     const szGeo = new THREE.BoxGeometry(0.45, 0.6, 0.02);
     const szMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
+      color: 0x4444ff,
       transparent: true,
       opacity: 0.15,
     });
@@ -102,7 +102,7 @@ function LiveSceneViewerInner({
 
     // Strike Zone Outline
     const edges = new THREE.EdgesGeometry(szGeo);
-    const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffff00, opacity: 0.9, transparent: true, linewidth: 2 });
     const strikeZoneOutline = new THREE.LineSegments(edges, lineMat);
     strikeZoneOutline.position.set(0, 0.95, 0.3);
     scene.add(strikeZoneOutline);
@@ -157,9 +157,9 @@ function LiveSceneViewerInner({
       trajectoriesGroup.remove(child);
     }
 
-    if (!predictResult || !predictResult.probabilities) return;
+    if (!predictResult || !predictResult.pitch_probabilities) return;
 
-    const sortedPitches = Object.entries(predictResult.probabilities)
+    const sortedPitches = Object.entries(predictResult.pitch_probabilities)
       .filter(([_, prob]) => prob > 0)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3);
@@ -213,25 +213,24 @@ function LiveSceneViewerInner({
 
   return (
     <div ref={mountRef} className="relative w-full h-full overflow-hidden select-none bg-[#0a0f1d] rounded-2xl border border-gray-800">
-      {/* Legend Map */}
+      {/* 구종 범례 — 17개 구종 색상 기준 */}
       <div className="absolute top-4 left-4 z-20 bg-gray-900/80 border border-gray-800 rounded-lg p-3 text-xs text-gray-300 space-y-2 backdrop-blur shadow-lg">
         <span className="font-bold text-white block pb-1 border-b border-gray-800">구종 범례</span>
-        <div className="flex items-center space-x-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
-          <span>패스트볼 (FF/FT/SI)</span>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-yellow-500 inline-block" />
-          <span>슬라이더/컷터 (SL/FC)</span>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
-          <span>체인지업/싱커 (CH/FS)</span>
-        </div>
-        <div className="flex items-center space-x-2">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
-          <span>커브/너클볼 (CU/KC/CB/KN)</span>
-        </div>
+        {[
+          { color: '#EF4444', label: '포심 (FF/FA)' },
+          { color: '#F59E0B', label: '싱커 (SI)' },
+          { color: '#EAB308', label: '커터 (FC)' },
+          { color: '#22C55E', label: '슬라이더 (SL)' },
+          { color: '#8B5CF6', label: '스위퍼 (ST)' },
+          { color: '#3B82F6', label: '커브 (CU/KC/CS)' },
+          { color: '#EC4899', label: '체인지업 (CH)' },
+          { color: '#F43F5E', label: '스플리터 (FS/FO)' },
+        ].map(({ color, label }) => (
+          <div key={label} className="flex items-center space-x-2">
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
 
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block z-0" />

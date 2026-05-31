@@ -1,5 +1,5 @@
 {
-  "name": "0_on_demand_replay — 온디맨드 구종 예측 및 경기 복기",
+  "name": "4_custom — 온디맨드 구종 예측 및 복기",
   "nodes": [
     {
       "parameters": {
@@ -15,102 +15,129 @@
       "position": [0, 300],
       "webhookId": "pitchflow-on-demand",
       "notesInFlow": true,
-      "notes": "프론트엔드 Custom 탭 버튼 클릭 시 실행\nPOST /webhook/on-demand-predict\n\n수신 페이로드:\n  pitcher_id   (필수)\n  batter_id    (필수)\n  balls        0~3 (필수)\n  strikes      0~2 (필수)\n  outs         0~2 (필수)\n  inning       1~18 (필수)\n  on_1b        0|1 (선택, 기본 0)\n  on_2b        0|1 (선택, 기본 0)\n  on_3b        0|1 (선택, 기본 0)\n  catcher_id   (선택)\n  actual_pitch (선택 — 복기 시 실제 투구 입력)\n\nValidation:\n  1차: 프론트 UI 버튼 고정값\n  2차: FastAPI Pydantic (범위 초과 시 HTTP 400)"
+      "notes": "POST /webhook/on-demand-predict\n수신: pitcher_id, batter_id, balls, strikes, outs, inning\n선택: catcher_id, on_1b/2b/3b, actual_pitch, stand, game_pk"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://statsapi.mlb.com/api/v1/people/{{ $json.batter_id }}/stats",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "stats",    "value": "lastXGames" },
+            { "name": "gameType", "value": "R" },
+            { "name": "group",    "value": "hitting" },
+            { "name": "limit",    "value": "7" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "neverError": true } },
+          "timeout": 5000
+        }
+      },
+      "id": "node-002-http-batter-recent",
+      "name": "타자 최근 성적 조회",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 160],
+      "notesInFlow": true,
+      "notes": "타자 최근 7경기 타격 성적\nAI 해설 컨텍스트용"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://statsapi.mlb.com/api/v1/people/{{ $('Webhook Trigger').first().json.batter_id }}/stats",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "stats",              "value": "vsPlayer" },
+            { "name": "opposingPlayerId",   "value": "={{ $('Webhook Trigger').first().json.pitcher_id }}" },
+            { "name": "gameType",           "value": "R" },
+            { "name": "group",              "value": "hitting" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "neverError": true } },
+          "timeout": 5000
+        }
+      },
+      "id": "node-003-http-vs-pitcher",
+      "name": "타자 vs 투수 상대전적",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 440],
+      "notesInFlow": true,
+      "notes": "타자 vs 선발 투수 역대 상대 성적\nAI 해설 컨텍스트용"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $vars.fastapi_base_url }}/predict/pitch",
+        "url": "=http://127.0.0.1:8000/predict/pitch?model_type=auto",
         "sendBody": true,
         "contentType": "json",
-        "body": {
-          "pitcher":      "={{ $json.pitcher_id }}",
-          "batter":       "={{ $json.batter_id }}",
-          "fielder_2":    "={{ $json.catcher_id ?? 0 }}",
-          "fielder_3":    0,
-          "fielder_4":    0,
-          "fielder_5":    0,
-          "fielder_6":    0,
-          "fielder_7":    0,
-          "fielder_8":    0,
-          "fielder_9":    0,
-          "game_pk":      "={{ $json.game_pk ?? 0 }}",
-          "game_year":    2025,
-          "balls":        "={{ $json.balls }}",
-          "strikes":      "={{ $json.strikes }}",
-          "outs_when_up": "={{ $json.outs }}",
-          "inning":       "={{ $json.inning ?? 1 }}",
-          "on_1b":        "={{ $json.on_1b ?? 0 }}",
-          "on_2b":        "={{ $json.on_2b ?? 0 }}",
-          "on_3b":        "={{ $json.on_3b ?? 0 }}",
-          "stand":        "R"
-        },
+        "body": "={\n  \"pitcher\":      {{ $('Webhook Trigger').first().json.pitcher_id }},\n  \"batter\":       {{ $('Webhook Trigger').first().json.batter_id }},\n  \"fielder_2\":    {{ $('Webhook Trigger').first().json.catcher_id ?? 0 }},\n  \"fielder_3\":    0,\n  \"fielder_4\":    0,\n  \"fielder_5\":    0,\n  \"fielder_6\":    0,\n  \"fielder_7\":    0,\n  \"fielder_8\":    0,\n  \"fielder_9\":    0,\n  \"game_pk\":      {{ $('Webhook Trigger').first().json.game_pk ?? 0 }},\n  \"game_year\":    2026,\n  \"balls\":        {{ Math.min($('Webhook Trigger').first().json.balls ?? 0, 3) }},\n  \"strikes\":      {{ Math.min($('Webhook Trigger').first().json.strikes ?? 0, 2) }},\n  \"outs_when_up\": {{ Math.min($('Webhook Trigger').first().json.outs ?? 0, 2) }},\n  \"inning\":       {{ $('Webhook Trigger').first().json.inning ?? 1 }},\n  \"on_1b\":        {{ $('Webhook Trigger').first().json.on_1b ?? 0 }},\n  \"on_2b\":        {{ $('Webhook Trigger').first().json.on_2b ?? 0 }},\n  \"on_3b\":        {{ $('Webhook Trigger').first().json.on_3b ?? 0 }},\n  \"stand\":        \"{{ $('Webhook Trigger').first().json.stand ?? 'R' }}\",\n  \"pitch_count_override\": {{ $('Webhook Trigger').first().json.pitch_count_override ?? 0 }}\n}",
         "options": {
-          "response": {
-            "response": { "neverError": false }
-          },
+          "response": { "response": { "neverError": false } },
           "timeout": 5000
         }
       },
-      "id": "node-002-http-fastapi",
+      "id": "node-004-http-fastapi",
       "name": "FastAPI 투구 예측",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [280, 300],
+      "position": [440, 300],
       "notesInFlow": true,
-      "notes": "POST {fastapi_base_url}/predict/pitch\nenrichment은 FastAPI 내부에서 Supabase 조회로 자동 처리\ngame_pk / at_bat_number / pitch_number: 온디맨드 시 null 허용\n예상 응답: { predicted_type: 'FF', probabilities: {...} }"
+      "notes": "POST http://127.0.0.1:8000/predict/pitch?model_type=auto\nauto 모드: per_pitcher 또는 stacking fallback\nstand 동적 처리 / balls,strikes,outs 클램핑"
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=## 구종 예측 복기 분석 요청\n\n### 경기 상황\n- 투수 ID: {{ $('Webhook Trigger').first().json.pitcher_id }}\n- 타자 ID: {{ $('Webhook Trigger').first().json.batter_id }}\n- 이닝: {{ $('Webhook Trigger').first().json.inning }}\n- 볼카운트: {{ $('Webhook Trigger').first().json.balls }}볼 {{ $('Webhook Trigger').first().json.strikes }}스트라이크\n- 아웃: {{ $('Webhook Trigger').first().json.outs }}아웃\n- 주자: 1루={{ $('Webhook Trigger').first().json.on_1b ?? 0 }}, 2루={{ $('Webhook Trigger').first().json.on_2b ?? 0 }}, 3루={{ $('Webhook Trigger').first().json.on_3b ?? 0 }}\n- 실제 투구 (복기): {{ $('Webhook Trigger').first().json.actual_pitch ?? 'null (입력 안 됨)' }}\n\n### 모델 예측 결과\n- 예측 구종: {{ $('FastAPI 투구 예측').first().json.predicted_type }}\n- 구종별 확률 분포:\n{{ JSON.stringify($('FastAPI 투구 예측').first().json.probabilities, null, 2) }}\n\n### 히스토리 데이터\n데이터베이스 미연결 상태 — 예측 확률 분포와 경기 상황만으로 분석해라.\n\n위 데이터를 종합하여 구종 예측 복기 해설 JSON을 반환해라.\nactual_pitch가 null이면 vs_actual은 반드시 null로 반환해라.",
+        "text": "=## 구종 예측 복기 분석 요청\n\n### 경기 상황\n- 투수 ID: {{ $('Webhook Trigger').first().json.pitcher_id }}\n- 타자 ID: {{ $('Webhook Trigger').first().json.batter_id }}\n- 이닝: {{ $('Webhook Trigger').first().json.inning }}\n- 볼카운트: {{ $('Webhook Trigger').first().json.balls }}볼 {{ $('Webhook Trigger').first().json.strikes }}스트라이크\n- 아웃: {{ $('Webhook Trigger').first().json.outs }}아웃\n- 주자: 1루={{ $('Webhook Trigger').first().json.on_1b ?? 0 }}, 2루={{ $('Webhook Trigger').first().json.on_2b ?? 0 }}, 3루={{ $('Webhook Trigger').first().json.on_3b ?? 0 }}\n- 실제 투구 (복기): {{ $('Webhook Trigger').first().json.actual_pitch ?? 'null (입력 안 됨)' }}\n\n### 타자 최근 7일 성적\n{{ JSON.stringify($('타자 최근 성적 조회').first().json.stats?.[0]?.splits?.[0]?.stat ?? {}, null, 2) }}\n\n### 타자 vs 투수 상대전적\n{{ JSON.stringify($('타자 vs 투수 상대전적').first().json.stats?.[0]?.splits?.[0]?.stat ?? {}, null, 2) }}\n\n### AI 예측 결과\n- 예측 구종: {{ $('FastAPI 투구 예측').first().json.predicted_pitch }}\n- 신뢰도: {{ ($('FastAPI 투구 예측').first().json.confidence * 100).toFixed(1) }}%\n- 라우팅: {{ $('FastAPI 투구 예측').first().json.routing }}\n- 구종별 확률:\n{{ JSON.stringify($('FastAPI 투구 예측').first().json.pitch_probabilities, null, 2) }}\n\n위 데이터를 종합하여 구종 예측 복기 해설 JSON을 반환해라.\nactual_pitch가 null이면 vs_actual은 반드시 null로 반환해라.",
         "options": {
-          "systemMessage": "너는 MLB 투구 전술 복기 분석 전문가다.\n구종 예측 확률, 투수 히스토리,\n타자 약점 데이터를 종합하여 해설해라.\nactual_pitch가 있으면 예측과 실제를 비교해라.\nactual_pitch가 null이면 vs_actual은 null로 반환해라.\n추측하지 마라. 데이터 기반으로만 분석해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"vs_actual\": \"string | null\"\n}"
+          "systemMessage": "너는 MLB 투구 전술 복기 분석 전문가다.\n예측 확률, 타자 최근 성적, 상대전적을 종합하여 해설해라.\nactual_pitch가 있으면 예측과 실제를 비교해라.\nactual_pitch가 null이면 vs_actual은 null로 반환해라.\n한국어로 작성해라. 추측하지 마라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"vs_actual\": \"string | null\"\n}"
         }
       },
       "id": "node-005-ai-agent",
-      "name": "복기 해설 AI Agent",
+      "name": "복기 해설 AI",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [1120, 300],
+      "position": [660, 300],
       "executeOnce": true,
       "notesInFlow": true,
-      "notes": "Model: claude-sonnet-4-20250514\nexecuteOnce: true → 1회만 실행 (비용 최적화)\n$('투수 히스토리 조회').all() → 50개 pitcher rows 전체 참조\n$('타자 약점 조회').all() → 50개 batter rows 전체 참조\nactual_pitch 유무에 따라 vs_actual 조건부 반환"
+      "notes": "GPT-4o Mini\n타자 최근성적 + 상대전적 + 예측확률 종합 해설\nactual_pitch 유무에 따라 vs_actual 조건부 반환"
     },
     {
       "parameters": {
-        "model": "claude-sonnet-4-20250514",
+        "model": "gpt-4o-mini",
         "options": {
           "maxTokens": 1024,
           "temperature": 0.2
         }
       },
-      "id": "node-005a-anthropic-model",
-      "name": "Claude Sonnet",
-      "type": "@n8n/n8n-nodes-langchain.lmAnthropicChatModel",
-      "typeVersion": 1.3,
-      "position": [1120, 540],
+      "id": "node-005a-openai-model",
+      "name": "GPT-4o Mini",
+      "type": "@n8n/n8n-nodes-langchain.lmOpenAi",
+      "typeVersion": 1.2,
+      "position": [660, 540],
       "credentials": {
-        "anthropicApi": {
-          "id": "ANTHROPIC_CREDENTIAL_ID",
-          "name": "Anthropic account"
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
         }
-      },
-      "notesInFlow": true,
-      "notes": "AI Agent의 Language Model 서브노드\n※ Anthropic API 자격증명 연결 필요"
+      }
     },
     {
       "parameters": {
-        "jsCode": "// ── Node 6: 예측 확률 + AI 해설 + vs_actual 최종 응답 조립 ──────────────────\nconst prediction  = $('FastAPI 투구 예측').first().json;\nconst webhook     = $('Webhook Trigger').first().json;\nconst aiRaw       = $input.first().json.output;\n\nlet ai;\ntry {\n  ai = JSON.parse(aiRaw);\n} catch (e) {\n  // JSON 파싱 실패 시 raw 텍스트를 commentary에 그대로 담음\n  ai = { commentary: aiRaw, reasoning: '', vs_actual: null };\n}\n\n// actual_pitch 없을 시 vs_actual 강제 null 처리\nconst vsActual = webhook.actual_pitch ? (ai.vs_actual ?? null) : null;\n\nreturn [{\n  json: {\n    predicted_pitch: prediction.predicted_type ?? null,\n    probabilities:   prediction.probabilities   ?? {},\n    commentary:      ai.commentary              ?? '',\n    reasoning:       ai.reasoning               ?? '',\n    vs_actual:       vsActual\n  }\n}];"
+        "jsCode": "// 최종 응답 조립\nconst webhook     = $('Webhook Trigger').first().json;\nconst prediction  = $('FastAPI 투구 예측').first().json;\nconst aiRaw       = $input.first().json.output ?? '{}';\n\nlet ai;\ntry { ai = JSON.parse(aiRaw); }\ncatch (e) { ai = { commentary: aiRaw, reasoning: '', vs_actual: null }; }\n\nconst vsActual = webhook.actual_pitch ? (ai.vs_actual ?? null) : null;\n\nreturn [{\n  json: {\n    predicted_pitch:     prediction.predicted_pitch,\n    confidence:          prediction.confidence,\n    pitch_probabilities: prediction.pitch_probabilities,\n    model_used:          prediction.model_used,\n    routing:             prediction.routing,\n    enrichment_latency_ms: prediction.enrichment_latency_ms,\n    commentary:          ai.commentary ?? '',\n    reasoning:           ai.reasoning  ?? '',\n    vs_actual:           vsActual\n  }\n}];"
       },
       "id": "node-006-code-response",
       "name": "응답 조립",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1400, 300],
+      "position": [880, 300],
       "executeOnce": true,
       "notesInFlow": true,
-      "notes": "최종 응답 구조:\n  predicted_pitch: 예측 구종 (string)\n  probabilities:   구종별 확률 분포 (object)\n  commentary:      AI 해설 (string)\n  reasoning:       추론 근거 (string)\n  vs_actual:       실제 투구 비교 (string | null)\n\nactual_pitch 미입력 시 vs_actual 강제 null 처리\nAI JSON 파싱 실패 시 Fallback 처리 포함"
+      "notes": "최종 응답 구조:\n  predicted_pitch / confidence / pitch_probabilities\n  routing / model_used\n  commentary / reasoning / vs_actual"
     },
     {
       "parameters": {
@@ -129,52 +156,39 @@
       "name": "Webhook 응답",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1680, 300],
-      "executeOnce": true,
-      "notesInFlow": true,
-      "notes": "조립된 최종 JSON 프론트엔드로 반환\nContent-Type: application/json\nHTTP 200\n\n응답 예시:\n{\n  \"predicted_pitch\": \"FF\",\n  \"probabilities\": {\"FF\":0.45,\"SL\":0.25,...},\n  \"commentary\": \"...\",\n  \"reasoning\": \"...\",\n  \"vs_actual\": \"...\"\n}"
+      "position": [1100, 300],
+      "executeOnce": true
     }
   ],
   "connections": {
-    "Webhook Trigger": {
-      "main": [
-        [{ "node": "FastAPI 투구 예측", "type": "main", "index": 0 }]
-      ]
-    },
-    "FastAPI 투구 예측": {
-      "main": [
-        [{ "node": "복기 해설 AI Agent", "type": "main", "index": 0 }]
-      ]
-    },
-    "Claude Sonnet": {
-      "ai_languageModel": [
-        [{ "node": "복기 해설 AI Agent", "type": "ai_languageModel", "index": 0 }]
-      ]
-    },
-    "복기 해설 AI Agent": {
-      "main": [
-        [{ "node": "응답 조립", "type": "main", "index": 0 }]
-      ]
-    },
-    "응답 조립": {
-      "main": [
-        [{ "node": "Webhook 응답", "type": "main", "index": 0 }]
-      ]
-    }
+  "Webhook Trigger": {
+    "main": [[
+      { "node": "타자 최근 성적 조회", "type": "main", "index": 0 },
+      { "node": "타자 vs 투수 상대전적", "type": "main", "index": 0 }
+    ]]
   },
+  "타자 최근 성적 조회": {
+    "main": [[{ "node": "FastAPI 투구 예측", "type": "main", "index": 0 }]]
+  },
+  "타자 vs 투수 상대전적": {
+    "main": [[{ "node": "FastAPI 투구 예측", "type": "main", "index": 0 }]]
+  },
+  "FastAPI 투구 예측": {
+    "main": [[{ "node": "복기 해설 AI", "type": "main", "index": 0 }]]
+  },
+  "GPT-4o Mini": {
+    "ai_languageModel": [[{ "node": "복기 해설 AI", "type": "ai_languageModel", "index": 0 }]]
+  },
+  "복기 해설 AI": {
+    "main": [[{ "node": "응답 조립", "type": "main", "index": 0 }]]
+  },
+  "응답 조립": {
+    "main": [[{ "node": "Webhook 응답", "type": "main", "index": 0 }]]
+  }
+},
   "active": false,
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "meta": {
-    "templateCredsSetupCompleted": false,
-    "instanceId": "pitchflow-ai"
-  },
-  "id": "pitchflow-on-demand-replay-v1",
-  "tags": [
-    { "name": "MLB" },
-    { "name": "on-demand" },
-    { "name": "replay" },
-    { "name": "webhook" }
-  ]
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "pitchflow-ai" },
+  "id": "pitchflow-custom-v2",
+  "tags": [{ "name": "MLB" }, { "name": "custom" }, { "name": "v2" }]
 }

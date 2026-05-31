@@ -32,8 +32,12 @@ def build_season_baseline(bat_df: pd.DataFrame) -> pd.DataFrame:
 
     baseline = (
         bat_df
-        .groupby(['pitcher', 'game_year'])[['release_speed', 'release_spin_rate']]
-        .mean()
+        .groupby(['pitcher', 'game_year'])
+        .agg({
+            'release_speed': 'mean',
+            'release_spin_rate': 'mean',
+            'p_throws': 'first',
+        })
         .reset_index()
         .rename(columns={
             'release_speed':     'season_avg_speed',
@@ -245,6 +249,73 @@ def integrate_fielding_oaa(
 
     print("야수 OAA 결합 완료")
     return df_feat
+
+
+def add_batter_swing_tendency_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    [타자 구종별 스윙 경향 피처 생성]
+    - 목적: 투수 구종 선택에 영향을 미치는 타자의 약점/강점 구종 정보를 명시적으로 제공
+    - 계산 기준: 동일 타자의 동일 game_year 전체 타석 대상 구종별 스윙율 산출
+    - 스윙 판정: description 컬럼이 스윙 액션을 포함하면 1 (swinging_strike, foul, hit_into_play 등)
+    - 누수 여부: 시즌 집계 통계 (사전 확정값) → 누수 없음
+    - 대상 구종: FF, SL, CH, SI, CU, FC (레퍼토리 피처와 동일 6종)
+    """
+    print("Batter Swing Tendency 피처 엔지니어링 시작...")
+
+    # --- 스윙 여부 파생 ---
+    # statcast description 기준 스윙 액션 식별자
+    SWING_DESCRIPTIONS = {
+        'swinging_strike', 'swinging_strike_blocked',
+        'foul', 'foul_tip', 'foul_bunt',
+        'hit_into_play', 'hit_into_play_no_out', 'hit_into_play_score',
+        'missed_bunt',
+    }
+
+    if 'description' in df.columns:
+        df['_is_swing'] = df['description'].isin(SWING_DESCRIPTIONS).astype(int)
+    else:
+        # description 컬럼 없는 경우 (추론 시점): 스윙율 0.5로 대체
+        print("  [경고] description 컬럼 없음 — 스윙율 0.5로 전체 대체")
+        TARGET_PITCHES = ['FF', 'SL', 'CH', 'SI', 'CU', 'FC']
+        RENAME_MAP = {pt: f'batter_{pt.lower()}_swing_rate' for pt in TARGET_PITCHES}
+        for col in RENAME_MAP.values():
+            df[col] = 0.5
+        return df
+
+    TARGET_PITCHES = ['FF', 'SL', 'CH', 'SI', 'CU', 'FC']
+    RENAME_MAP = {pt: f'batter_{pt.lower()}_swing_rate' for pt in TARGET_PITCHES}
+
+    for pt in TARGET_PITCHES:
+        col_name = RENAME_MAP[pt]
+        pt_mask = df['pitch_type'] == pt
+
+        if pt_mask.sum() == 0:
+            df[col_name] = 0.5
+            continue
+
+        # 타자 × 시즌 × 해당 구종 스윙율
+        swing_rate = (
+            df[pt_mask]
+            .groupby(['batter', 'game_year'])['_is_swing']
+            .mean()
+            .reset_index()
+            .rename(columns={'_is_swing': col_name})
+        )
+
+        df = df.merge(swing_rate, on=['batter', 'game_year'], how='left')
+
+        # 해당 구종을 상대한 기록 없는 타자 → 리그 평균 대체
+        league_avg = df[col_name].mean()
+        df[col_name] = df[col_name].fillna(league_avg if not np.isnan(league_avg) else 0.5)
+
+    df = df.drop(columns=['_is_swing'])
+
+    for pt in TARGET_PITCHES:
+        col_name = RENAME_MAP[pt]
+        print(f"  {col_name} 평균: {df[col_name].mean():.4f}")
+
+    print("Batter Swing Tendency 피처 엔지니어링 완료")
+    return df
 
 
 if __name__ == "__main__":

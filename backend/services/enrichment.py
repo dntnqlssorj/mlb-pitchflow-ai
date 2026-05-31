@@ -47,6 +47,7 @@ def enrich_pitch_context(
     on_2b:                 int,
     on_3b:                 int,
     pitch_count_override:  Optional[int] = None,
+    inning:                int = 1,
 ) -> dict:
     t_start = time.perf_counter()
 
@@ -55,6 +56,7 @@ def enrich_pitch_context(
     baseline = baseline_cache.get((pitcher_id, game_year), {})
     base_speed = baseline.get("base_speed") or 0.0
     base_spin  = baseline.get("base_spin")  or 0.0
+    p_throws   = baseline.get("p_throws")   or "R"
     baseline_source = "cache" if baseline else "fallback_zero"
 
     # 2. 투수 구종 비율
@@ -76,12 +78,19 @@ def enrich_pitch_context(
     oaa_source = "cache" if any(oaa_map.values()) else "fallback_zero"
 
     # 5. 투구 수
-    pitch_count_in_game = pitch_count_override if pitch_count_override is not None else 0
-    pitch_count_source = "override" if pitch_count_override is not None else "fallback_zero"
+    if pitch_count_override is not None:
+        pitch_count_in_game = pitch_count_override
+        pitch_count_source = "override"
+    else:
+        # 이닝 기반 Heuristic 추정: 이닝당 15구 기준 (최소 1구)
+        pitch_count_in_game = max((inning - 1) * 15 + 1, 1)
+        pitch_count_source = "heuristic_inning"
 
-    # 6. 파생 피처 연산
-    velocity_decay_ratio = 1.0
-    spin_decay_ratio     = 1.0
+    # 6. 파생 피처 연산 (수학적 감속 및 감쇠율 계산)
+    # 선발 투수 기준: 100구당 약 1.5% 구속 저하, 1.0% 회전수 저하 반영 (하한값 0.8)
+    velocity_decay_ratio = max(1.0 - (pitch_count_in_game * 0.00015), 0.8)
+    spin_decay_ratio     = max(1.0 - (pitch_count_in_game * 0.00010), 0.8)
+
     vel_drop  = max(1.0 - velocity_decay_ratio, 0)
     spin_drop = max(1.0 - spin_decay_ratio, 0)
     stamina_index = (pitch_count_in_game / 100.0) * (vel_drop * 0.7 + spin_drop * 0.3)
@@ -95,6 +104,7 @@ def enrich_pitch_context(
         "pitch_count_in_game":   pitch_count_in_game,
         "base_speed":            base_speed,
         "base_spin":             base_spin,
+        "p_throws":              p_throws,
         "velocity_decay_ratio":  velocity_decay_ratio,
         "spin_decay_ratio":      spin_decay_ratio,
         "stamina_index":         stamina_index,

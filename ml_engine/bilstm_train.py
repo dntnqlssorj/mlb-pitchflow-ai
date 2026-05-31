@@ -83,10 +83,22 @@ def train_bilstm(sampling_rate: float = 0.1):
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
+    # - best_params 로드 후 hidden_size 절반 적용 (과적합 억제)
+    import json
+    params_path = MODEL_DIR / "best_params_bilstm.json"
+    bp = json.load(open(params_path)) if params_path.exists() else {}
+    hidden_size  = max(32, bp.get("hidden_size", 128) // 2)  # 128 → 64
+    num_layers   = bp.get("num_layers", 2)
+    dropout      = bp.get("dropout", 0.45)
+    print(f"[BiLSTM 파라미터] hidden_size={hidden_size} (best 절반), num_layers={num_layers}, dropout={dropout:.3f}")
+
     # - 모델 초기화
     model = PitchBiLSTM(
         feature_dim=feature_dim,
-        n_classes=n_classes
+        n_classes=n_classes,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout,
     ).to(device)
 
     # - 클래스 불균형 완화 (스퀘어루트 기반 가중치로 안정성과 소수 클래스 탐색성 동시 확보)
@@ -98,7 +110,7 @@ def train_bilstm(sampling_rate: float = 0.1):
 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=LR, weight_decay=1e-4
+        model.parameters(), lr=LR, weight_decay=1e-3  # 1e-4 → 1e-3 (과적합 억제)
     )
     scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS)
 

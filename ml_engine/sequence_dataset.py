@@ -23,7 +23,7 @@ class PitchSequenceDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-def build_sequence_dataset(df, label_encoder, split='train', features=None):
+def build_sequence_dataset(df, label_encoder, split='train', features=None, seq_len=5):
     """
     [슬라이딩 윈도우 3D 텐서 구축]
     - split: 'train' (2024) | 'test' (2025)
@@ -60,23 +60,23 @@ def build_sequence_dataset(df, label_encoder, split='train', features=None):
         labels = group['pitch_encoded'].values
 
         for i in range(len(group)):
-            # 현재 투구 이전 SEQUENCE_LENGTH구 추출
-            start = max(0, i - SEQUENCE_LENGTH)
+            # 현재 투구 이전 seq_len구 추출
+            start = max(0, i - seq_len)
             window = feats[start:i]  # 현재 투구 자신 미포함
 
             # Zero padding (앞쪽 채움)
-            if len(window) < SEQUENCE_LENGTH:
+            if len(window) < seq_len:
                 pad = np.zeros(
-                    (SEQUENCE_LENGTH - len(window), len(available)),
+                    (seq_len - len(window), len(available)),
                     dtype=np.float32
                 )
                 window = np.vstack([pad, window]) if len(window) > 0 else \
-                         np.zeros((SEQUENCE_LENGTH, len(available)), dtype=np.float32)
+                         np.zeros((seq_len, len(available)), dtype=np.float32)
 
             X_list.append(window)
             y_list.append(labels[i])
 
-    X = np.array(X_list, dtype=np.float32)   # (N, 5, F)
+    X = np.array(X_list, dtype=np.float32)   # (N, seq_len, F)
     y = np.array(y_list, dtype=np.int64)      # (N,)
 
     print(f"[{split}] 텐서 shape: {X.shape}, 라벨 수: {len(np.unique(y))}")

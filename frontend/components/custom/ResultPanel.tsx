@@ -45,15 +45,15 @@ export default function ResultPanel({ result, actualPitch }: ResultPanelProps) {
     );
   }
 
-  const { predicted_pitch, probabilities, commentary, reasoning } = result;
+  const { predicted_pitch, pitch_probabilities, commentary, reasoning } = result;
 
   // Filter out 0% probabilities and sort in descending order
-  const sortedProbabilities = Object.entries(probabilities)
+  const sortedProbabilities = Object.entries(pitch_probabilities)
     .map(([pitch, val]) => ({ pitch: pitch as PitchType, prob: val }))
     .filter((p) => p.prob > 0)
     .sort((a, b) => b.prob - a.prob);
 
-  const topProb = probabilities[predicted_pitch] ?? 0;
+  const topProb = pitch_probabilities[predicted_pitch] ?? 0;
   const topProbPercent = Math.round(topProb * 100);
 
   // Compare actual pitch against prediction
