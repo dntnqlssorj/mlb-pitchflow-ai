@@ -220,7 +220,7 @@ export default function CustomPage() {
                       </span>
                     </div>
                     <div style={{ fontSize: '10px', color: '#555', marginTop: '2px' }}>
-                      {result.routing === 'per_pitcher' ? '🎯 투수 전용 모델' : '📊 글로벌 스태킹'}
+                      {result.routing === 'per_pitcher' ? '🎯 투수 전용 모델' : result.routing === 'scouting_llm' ? '🔍 스카우팅 LLM' : '📊 글로벌 스태킹'}
                     </div>
                   </div>
                 </div>
