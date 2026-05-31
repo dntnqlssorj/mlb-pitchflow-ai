@@ -30,6 +30,7 @@ from ml_engine.feature_engineering import (
     add_pitcher_repertoire_features,
     add_situational_features,
     add_pitcher_situation_features,
+    add_batter_swing_tendency_features,
 )
 from ml_engine.config import (
     ALLOWED_FEATURES,
@@ -91,6 +92,7 @@ def prepare_training_data(sampling_rate: float = 0.1, return_df: bool = False) -
     df = add_pitcher_repertoire_features(df)
     df = add_situational_features(df)
     df = add_pitcher_situation_features(df)
+    df = add_batter_swing_tendency_features(df)
 
     # ------------------------------------------------------------------
     # 단계 5. 타겟 결측치 제거

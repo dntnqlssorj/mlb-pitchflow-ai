@@ -101,7 +101,9 @@ export default function InputForm({
       on_1b: on1b ? 1 : 0,
       on_2b: on2b ? 1 : 0,
       on_3b: on3b ? 1 : 0,
-      stand: 0 // Default value for Custom tab
+      stand: batter?.side ?? 'R', // 타자 정보에서 자동 연동
+      game_pk: 0,
+      game_year: 2026,
     };
 
     if (catcher !== null) {

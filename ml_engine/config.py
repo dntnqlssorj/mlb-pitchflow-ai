@@ -95,6 +95,21 @@ ALLOWED_FEATURES: List[str] = [
     # vs 우타
     'pitcher_ff_pct_vsR', 'pitcher_sl_pct_vsR', 'pitcher_ch_pct_vsR',
     'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
+
+    # ===========================================================================
+    # [추가] 그룹 J: 타자 구종별 스윙 경향 — 6개
+    # 추가 이유: 투수가 특정 구종을 던질 때 타자의 스윙 반응율을 명시적으로 제공
+    #            → 모델이 타자 약점 구종을 인지하여 예측 분별력 향상 기대
+    # 계산 기준: 타자 × game_year × 구종 조합의 시즌 전체 스윙율 (사전 확정값)
+    # 누수 여부: 시즌 집계 통계 — 누수 없음
+    # ===========================================================================
+    'batter_ff_swing_rate',
+    'batter_sl_swing_rate',
+    'batter_ch_swing_rate',
+    'batter_si_swing_rate',
+    'batter_cu_swing_rate',
+    'batter_fc_swing_rate',
+
     # ===========================================================================
     # [추가] 그룹 K: PK 식별자 — 3개
     # 추가 이유: statcast_bat_tracking 테이블의 PRIMARY KEY 구성 컬럼
@@ -109,7 +124,8 @@ ALLOWED_FEATURES: List[str] = [
     'at_bat_number',
     'pitch_number',
 ]
-# ALLOWED_FEATURES 총 69개 (66개 피처 + 3개 PK 식별자)
+# ALLOWED_FEATURES 총 75개 (72개 피처 + 3개 PK 식별자)
+# 신규: 그룹 J 타자 스윙 경향 6개 추가 (2026-05-29)
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)

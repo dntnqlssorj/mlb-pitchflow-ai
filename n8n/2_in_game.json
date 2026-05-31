@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "seconds",
-              "secondsInterval": 8
+              "secondsInterval": 15
             }
           ]
         }
@@ -16,51 +16,42 @@
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        0,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "8초 간격 폴링 (피치클락 15초 기준 안전 마진 확보)\nn8n 워크플로우 변수 설정 필요:\n  game_pk              = 대상 경기 game_pk\n  fastapi_base_url     = FastAPI 서버 주소\n  frontend_webhook_url = 프론트엔드 Push 수신 URL"
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst gamePk = staticData.active_game_pk ?? 824593;\nreturn [{ json: { game_pk: gamePk } }];"
+      },
+      "id": "node-002-code-gamepk",
+      "name": "game_pk 로드",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
     },
     {
       "parameters": {
         "method": "GET",
-        "url": "=https://statsapi.mlb.com/api/v1/game/{{ $vars.game_pk }}/feed/live",
+        "url": "=https://statsapi.mlb.com/api/v1.1/game/{{ $json.game_pk }}/feed/live",
         "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          },
+          "response": { "response": { "neverError": true } },
           "timeout": 6000
         }
       },
-      "id": "node-002-http-livefeed",
+      "id": "node-003-http-livefeed",
       "name": "MLB Live Feed",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        280,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "MLB Stats API 공개 엔드포인트 (인증 불필요)\nGET /v1/game/{game_pk}/feed/live\n경기 전체 이벤트 로그 실시간 수집"
+      "position": [440, 300]
     },
     {
       "parameters": {
-        "jsCode": "// ── Node 3: 투구 diff 감지 (피치클락 8초 폴링) ──────────────────────────────\nconst staticData = $getWorkflowStaticData('global');\nconst feed       = $input.first().json;\n\nconst gameState   = feed.gameData?.status?.abstractGameState;\nconst currentPlay = feed.liveData?.plays?.currentPlay;\nconst linescore   = feed.liveData?.linescore;\n\n// ① 현재 타석 + 누적 투구 수 기반 고유 pitch ID 생성\nconst atBatIdx    = currentPlay?.about?.atBatIndex ?? -1;\nconst pitchEvents = (currentPlay?.playEvents ?? []).filter(e => e.isPitch);\nconst pitchCount  = pitchEvents.length;\nconst pitchId     = `${atBatIdx}-${pitchCount}`;\nconst lastPitchId = staticData.lastPitchId ?? '';\n\n// ② 신규 투구 없음 → IF Node에서 FALSE 분기\nif (pitchCount === 0 || pitchId === lastPitchId) {\n  return [{\n    json: {\n      has_new_pitch: false,\n      game_state:    gameState,\n      game_pk:       feed.gamePk\n    }\n  }];\n}\n\n// ③ 신규 투구 감지 → 수비팀 야수 ID 추출\nconst latestPitch = pitchEvents[pitchEvents.length - 1];\nconst boxscore    = feed.liveData?.boxscore;\nconst halfInning  = currentPlay?.about?.halfInning ?? 'top';\nconst defSide     = halfInning === 'top' ? 'home' : 'away';\nconst defTeam     = boxscore?.teams?.[defSide];\n\nlet   catcherId  = null;\nconst fielderIds = [];\nfor (const [, player] of Object.entries(defTeam?.players ?? {})) {\n  const posCode = player?.position?.code;\n  const id      = player?.person?.id;\n  if (!id) continue;\n  if (posCode === '2') catcherId = id;\n  const posNum = parseInt(posCode);\n  if (posNum >= 3 && posNum <= 9) fielderIds.push(id);\n}\n\n// ④ [추가] 타자 타석 방향 추출 (stand 동적 처리)\nconst batSide = currentPlay?.matchup?.batSide?.code ?? 'R';\n\n// ⑤ [추가] 경기 내 투수별 누적 투구 수 카운트\nconst pitcherId = currentPlay?.matchup?.pitcher?.id;\nif (!staticData.pitchCountByPitcher) staticData.pitchCountByPitcher = {};\n// 경기가 바뀌면 카운트 초기화\nif (staticData.lastGamePk !== feed.gamePk) {\n  staticData.pitchCountByPitcher = {};\n  staticData.lastGamePk = feed.gamePk;\n}\nif (pitcherId) {\n  staticData.pitchCountByPitcher[pitcherId] =\n    (staticData.pitchCountByPitcher[pitcherId] ?? 0) + 1;\n}\nconst pitchCountOverride = pitcherId\n  ? (staticData.pitchCountByPitcher[pitcherId] ?? 0)\n  : 0;\n\n// ⑥ 상태 저장 (다음 폴링에서 비교용)\nstaticData.lastPitchId = pitchId;\n\nreturn [{\n  json: {\n    has_new_pitch:        true,\n    game_pk:              feed.gamePk,\n    at_bat_number:        atBatIdx,\n    pitch_number:         latestPitch.pitchNumber,\n    pitcher_id:           pitcherId,\n    batter_id:            currentPlay?.matchup?.batter?.id,\n    catcher_id:           catcherId,\n    fielder_ids:          fielderIds.slice(0, 7),\n    inning:               linescore?.currentInning,\n    balls:                currentPlay?.count?.balls,\n    strikes:              currentPlay?.count?.strikes,\n    outs:                 currentPlay?.count?.outs,\n    on_1b:                linescore?.offense?.first  ? 1 : 0,\n    on_2b:                linescore?.offense?.second ? 1 : 0,\n    on_3b:                linescore?.offense?.third  ? 1 : 0,\n    game_state:           gameState,\n    bat_side:             batSide,\n    pitch_count_override: pitchCountOverride\n  }\n}];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst feed = $input.first().json;\n\nconst gameState = feed.gameData?.status?.abstractGameState;\nconst currentPlay = feed.liveData?.plays?.currentPlay;\nconst linescore = feed.liveData?.linescore;\n\nif (!currentPlay) {\n  return [{ json: { has_new_pitch: 0, game_state: gameState, game_pk: feed.gamePk } }];\n}\n\nconst atBatIdx = currentPlay?.about?.atBatIndex ?? -1;\nconst pitchEvents = (currentPlay?.playEvents ?? []).filter(e => e.isPitch);\nconst pitchCount = pitchEvents.length;\nconst pitchId = `${atBatIdx}-${pitchCount}`;\nconst lastPitchId = staticData.lastPitchId ?? '';\n\nif (pitchCount === 0 || pitchId === lastPitchId) {\n  return [{ json: { has_new_pitch: 0, game_state: gameState, game_pk: feed.gamePk } }];\n}\n\nconst boxscore = feed.liveData?.boxscore;\nconst halfInning = currentPlay?.about?.halfInning ?? 'top';\nconst defSide = halfInning === 'top' ? 'home' : 'away';\nconst defTeam = boxscore?.teams?.[defSide];\n\nlet catcherId = null;\nconst fielderIds = [];\nfor (const [, player] of Object.entries(defTeam?.players ?? {})) {\n  const posCode = player?.position?.code;\n  const id = player?.person?.id;\n  if (!id) continue;\n  if (posCode === '2') catcherId = id;\n  const posNum = parseInt(posCode);\n  if (posNum >= 3 && posNum <= 9) fielderIds.push(id);\n}\n\nconst batSide = currentPlay?.matchup?.batSide?.code ?? 'R';\nconst pitcherId = currentPlay?.matchup?.pitcher?.id;\n\nif (!staticData.pitchCountByPitcher) staticData.pitchCountByPitcher = {};\nif (staticData.lastGamePk !== feed.gamePk) {\n  staticData.pitchCountByPitcher = {};\n  staticData.lastGamePk = feed.gamePk;\n}\nif (pitcherId) {\n  staticData.pitchCountByPitcher[pitcherId] = (staticData.pitchCountByPitcher[pitcherId] ?? 0) + 1;\n}\nconst pitchCountOverride = pitcherId ? (staticData.pitchCountByPitcher[pitcherId] ?? 0) : 0;\n\nif (!staticData.pitchEffectiveness) staticData.pitchEffectiveness = {};\nconst latestPitch = pitchEvents[pitchEvents.length - 1];\nconst pitchType = latestPitch?.details?.type?.code;\nconst pitchResult = latestPitch?.details?.description ?? '';\nconst isEffective = ['Swinging Strike', 'Called Strike', 'Foul', 'Foul Tip', 'Swinging Strike (Blocked)'].some(r => pitchResult.includes(r));\nif (pitchType && pitcherId) {\n  const key = `${pitcherId}_${pitchType}`;\n  if (!staticData.pitchEffectiveness[key]) staticData.pitchEffectiveness[key] = { total: 0, effective: 0 };\n  staticData.pitchEffectiveness[key].total += 1;\n  if (isEffective) staticData.pitchEffectiveness[key].effective += 1;\n}\n\nconst preGameContext = staticData[`context_${feed.gamePk}`] ?? {};\nstaticData.lastPitchId = pitchId;\n\nreturn [{\n  json: {\n    has_new_pitch: 1,\n    game_pk: feed.gamePk,\n    at_bat_number: atBatIdx,\n    pitch_number: latestPitch?.pitchNumber,\n    pitcher_id: pitcherId,\n    batter_id: currentPlay?.matchup?.batter?.id,\n    catcher_id: catcherId,\n    fielder_ids: fielderIds.slice(0, 7),\n    inning: linescore?.currentInning,\n    balls: currentPlay?.count?.balls,\n    strikes: currentPlay?.count?.strikes,\n    outs: currentPlay?.count?.outs,\n    on_1b: linescore?.offense?.first  ? 1 : 0,\n    on_2b: linescore?.offense?.second ? 1 : 0,\n    on_3b: linescore?.offense?.third  ? 1 : 0,\n    home_score: linescore?.teams?.home?.runs ?? 0,\n    away_score: linescore?.teams?.away?.runs ?? 0,\n    game_state: gameState,\n    bat_side: batSide,\n    pitch_count_override: pitchCountOverride,\n    pitch_effectiveness: staticData.pitchEffectiveness,\n    pre_game_context: preGameContext\n  }\n}];"
       },
-      "id": "node-003-code-diff",
+      "id": "node-004-code-diff",
       "name": "투구 diff 감지",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        560,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "$getWorkflowStaticData로 폴링 사이클 간 lastPitchId 유지\npitchId = `{atBatIndex}-{pitchCount}` 조합으로 중복 감지\n신규 투구 없으면 has_new_pitch: false → Node 4 FALSE 분기"
+      "position": [660, 300]
     },
     {
       "parameters": {
@@ -68,16 +59,16 @@
           "options": {
             "caseSensitive": true,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
               "id": "cond-has-new-pitch",
               "leftValue": "={{ $json.has_new_pitch }}",
-              "rightValue": true,
+              "rightValue": 1,
               "operator": {
-                "type": "boolean",
-                "operation": "equal"
+                "type": "number",
+                "operation": "equals"
               }
             }
           ],
@@ -85,149 +76,125 @@
         },
         "options": {}
       },
-      "id": "node-004-if-newpitch",
+      "id": "node-005-if-newpitch",
       "name": "신규 투구 여부",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        840,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "TRUE  → Node 5 FastAPI 예측 요청\nFALSE → 이번 사이클 종료 (8초 후 재폴링)"
+      "position": [880, 300]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $vars.fastapi_base_url }}/predict/pitch",
+        "url": "=http://127.0.0.1:8000/predict/pitch?model_type=auto",
         "sendBody": true,
         "contentType": "json",
         "body": {
-          "pitcher": "={{ $json.pitcher_id }}",
-          "batter": "={{ $json.batter_id }}",
-          "fielder_2": "={{ $json.catcher_id ?? 0 }}",
-          "fielder_3": "={{ $json.fielder_ids?.[0] ?? 0 }}",
-          "fielder_4": "={{ $json.fielder_ids?.[1] ?? 0 }}",
-          "fielder_5": "={{ $json.fielder_ids?.[2] ?? 0 }}",
-          "fielder_6": "={{ $json.fielder_ids?.[3] ?? 0 }}",
-          "fielder_7": "={{ $json.fielder_ids?.[4] ?? 0 }}",
-          "fielder_8": "={{ $json.fielder_ids?.[5] ?? 0 }}",
-          "fielder_9": "={{ $json.fielder_ids?.[6] ?? 0 }}",
-          "game_pk": "={{ $json.game_pk }}",
-          "game_year": "={{ new Date($json.game_date ?? new Date()).getFullYear() }}",
-          "balls": "={{ $json.balls }}",
-          "strikes": "={{ $json.strikes }}",
+          "pitcher":      "={{ $json.pitcher_id }}",
+          "batter":       "={{ $json.batter_id }}",
+          "fielder_2":    "={{ $json.catcher_id ?? 0 }}",
+          "fielder_3":    "={{ $json.fielder_ids?.[0] ?? 0 }}",
+          "fielder_4":    "={{ $json.fielder_ids?.[1] ?? 0 }}",
+          "fielder_5":    "={{ $json.fielder_ids?.[2] ?? 0 }}",
+          "fielder_6":    "={{ $json.fielder_ids?.[3] ?? 0 }}",
+          "fielder_7":    "={{ $json.fielder_ids?.[4] ?? 0 }}",
+          "fielder_8":    "={{ $json.fielder_ids?.[5] ?? 0 }}",
+          "fielder_9":    "={{ $json.fielder_ids?.[6] ?? 0 }}",
+          "game_pk":      "={{ $json.game_pk }}",
+          "game_year":    2026,
+          "balls":        "={{ $json.balls }}",
+          "strikes":      "={{ $json.strikes }}",
           "outs_when_up": "={{ $json.outs }}",
-          "inning": "={{ $json.inning }}",
-          "on_1b": "={{ $json.on_1b ?? 0 }}",
-          "on_2b": "={{ $json.on_2b ?? 0 }}",
-          "on_3b": "={{ $json.on_3b ?? 0 }}",
-          "stand": "={{ $json.bat_side ?? 'R' }}",
-          "pitch_count_override": "={{ $json.pitch_count_override ?? 0 }}"
+          "inning":       "={{ $json.inning }}",
+          "on_1b":        "={{ $json.on_1b ?? 0 }}",
+          "on_2b":        "={{ $json.on_2b ?? 0 }}",
+          "on_3b":        "={{ $json.on_3b ?? 0 }}",
+          "stand":        "={{ $json.bat_side ?? 'R' }}",
+          "pitch_count_override": "={{ $json.pitch_count_override ?? 0 }}",
+          "home_score_diff": "={{ ($json.home_score ?? 0) - ($json.away_score ?? 0) }}",
+          "bat_score_diff":  "={{ ($json.away_score ?? 0) - ($json.home_score ?? 0) }}"
         },
         "options": {
-          "response": {
-            "response": {
-              "neverError": false
-            }
-          },
+          "response": { "response": { "neverError": false } },
           "timeout": 5000
         }
       },
-      "id": "node-005-http-fastapi",
+      "id": "node-006-http-fastapi",
       "name": "FastAPI 투구 예측",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1120,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "POST {fastapi_base_url}/predict/pitch\nenrichment은 FastAPI 내부에서 Supabase 조회로 처리\n예상 응답: { predicted_type: 'FF', probabilities: {FF:0.45, SL:0.25, ...} }"
+      "position": [1100, 300]
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=## 투구 예측 분석 요청\n\n**경기 상황**\n- game_pk: {{ $('투구 diff 감지').item.json.game_pk }}\n- 이닝: {{ $('투구 diff 감지').item.json.inning }}\n- 볼카운트: {{ $('투구 diff 감지').item.json.balls }}볼 {{ $('투구 diff 감지').item.json.strikes }}스트라이크\n- 아웃: {{ $('투구 diff 감지').item.json.outs }}아웃\n- 주자: 1루={{ $('투구 diff 감지').item.json.on_1b }}, 2루={{ $('투구 diff 감지').item.json.on_2b }}, 3루={{ $('투구 diff 감지').item.json.on_3b }}\n- 투수 ID: {{ $('투구 diff 감지').item.json.pitcher_id }}\n- 타자 ID: {{ $('투구 diff 감지').item.json.batter_id }}\n\n**모델 예측 결과**\n- 예측 구종: {{ $json.predicted_type }}\n- 구종별 확률 분포:\n{{ JSON.stringify($json.probabilities, null, 2) }}\n\n위 데이터를 분석하여 투구 전술 해설 JSON을 반환해라.",
+        "text": "=## MLB 투구 예측 해설 요청\n\n### 현재 경기 상황\n- 이닝: {{ $('투구 diff 감지').item.json.inning }}회\n- 볼카운트: {{ $('투구 diff 감지').item.json.balls }}볼 {{ $('투구 diff 감지').item.json.strikes }}스트라이크\n- 아웃: {{ $('투구 diff 감지').item.json.outs }}아웃\n- 주자: 1루={{ $('투구 diff 감지').item.json.on_1b }}, 2루={{ $('투구 diff 감지').item.json.on_2b }}, 3루={{ $('투구 diff 감지').item.json.on_3b }}\n- 투수 ID: {{ $('투구 diff 감지').item.json.pitcher_id }}\n- 타자 ID: {{ $('투구 diff 감지').item.json.batter_id }}\n- 타자 좌우: {{ $('투구 diff 감지').item.json.bat_side }}\n- 투수 누적 투구수: {{ $('투구 diff 감지').item.json.pitch_count_override }}\n\n### AI 예측 결과\n- 예측 구종: {{ $json.predicted_pitch }}\n- 신뢰도: {{ ($json.confidence * 100).toFixed(1) }}%\n- 라우팅: {{ $json.routing }}\n- 구종별 확률:\n{{ JSON.stringify($json.pitch_probabilities, null, 2) }}\n\n### 당일 구종 효과 현황\n{{ JSON.stringify($('투구 diff 감지').item.json.pitch_effectiveness, null, 2) }}\n\n위 데이터를 종합하여 투구 전술 해설 JSON을 반환해라.",
         "options": {
-          "systemMessage": "너는 MLB 투구 전술 해설 전문가다.\n구종 예측 확률 분포와 현재 경기 상황을 받아\n왜 이 구종이 추천되는지 자연어로 해설해라.\n추측하지 마라. 데이터 기반으로만 설명해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"confidence\": \"high | medium | low\"\n}"
+          "systemMessage": "너는 MLB 투구 전술 해설 전문가다.\n현재 경기 상황과 AI 예측 확률을 바탕으로\n왜 이 구종이 예측되는지 한국어로 2~3문장 해설해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"confidence_level\": \"high | medium | low\"\n}"
         }
       },
-      "id": "node-006-ai-agent",
-      "name": "전술 해설 AI Agent",
+      "id": "node-007-ai-agent",
+      "name": "전술 해설 AI",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [
-        1400,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "Model: claude-sonnet-4-20250514 (하위 노드로 연결)\n예측 확률 분포 + 경기 상황 → 전술 해설 JSON\n출력: { commentary, reasoning, confidence }"
+      "position": [1320, 300]
     },
     {
       "parameters": {
-        "model": "claude-sonnet-4-20250514",
+        "model": "gpt-4o-mini",
         "options": {
           "maxTokens": 512,
           "temperature": 0.3
         }
       },
-      "id": "node-006a-anthropic-model",
-      "name": "Claude Sonnet",
-      "type": "@n8n/n8n-nodes-langchain.lmAnthropicChatModel",
-      "typeVersion": 1.3,
-      "position": [
-        1400,
-        540
-      ],
+      "id": "node-007a-openai-model",
+      "name": "GPT-4o Mini",
+      "type": "@n8n/n8n-nodes-langchain.lmOpenAi",
+      "typeVersion": 1.2,
+      "position": [1320, 540],
       "credentials": {
-        "anthropicApi": {
-          "id": "ANTHROPIC_CREDENTIAL_ID",
-          "name": "Anthropic account"
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
         }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const diffData   = $('투구 diff 감지').item.json;\nconst prediction = $('FastAPI 투구 예측').item.json;\nconst aiRaw      = $input.first().json.output ?? '{}';\n\nlet ai;\ntry {\n  ai = JSON.parse(aiRaw);\n} catch (e) {\n  ai = { commentary: aiRaw, reasoning: '', confidence_level: 'low' };\n}\n\nreturn [{\n  json: {\n    event:           'new_pitch_prediction',\n    game_pk:         diffData.game_pk,\n    at_bat_number:   diffData.at_bat_number,\n    pitch_number:    diffData.pitch_number,\n    inning:          diffData.inning,\n    count:           `${diffData.balls}B-${diffData.strikes}S`,\n    outs:            diffData.outs,\n    on_1b:           diffData.on_1b,\n    on_2b:           diffData.on_2b,\n    on_3b:           diffData.on_3b,\n    pitcher_id:      diffData.pitcher_id,\n    batter_id:       diffData.batter_id,\n    bat_side:        diffData.bat_side,\n    predicted_pitch: prediction.predicted_pitch,\n    confidence:      prediction.confidence,\n    pitch_probabilities: prediction.pitch_probabilities,\n    model_used:      prediction.model_used,\n    routing:         prediction.routing,\n    commentary:      ai.commentary,\n    reasoning:       ai.reasoning,\n    confidence_level: ai.confidence_level,\n    inference_ts:    new Date().toISOString()\n  }\n}];"
       },
-      "notesInFlow": true,
-      "notes": "AI Agent의 Language Model 서브노드\n※ Anthropic API 자격증명 연결 필요"
+      "id": "node-008-code-payload",
+      "name": "Push 페이로드 조립",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $vars.frontend_webhook_url }}",
+        "url": "=http://localhost:3000/api/mlb/prediction",
         "sendBody": true,
         "contentType": "json",
-        "body": {
-          "event": "new_pitch_prediction",
-          "game_pk": "={{ $('투구 diff 감지').item.json.game_pk }}",
-          "at_bat_number": "={{ $('투구 diff 감지').item.json.at_bat_number }}",
-          "pitch_number": "={{ $('투구 diff 감지').item.json.pitch_number }}",
-          "inning": "={{ $('투구 diff 감지').item.json.inning }}",
-          "count": "={{ $('투구 diff 감지').item.json.balls }}B-{{ $('투구 diff 감지').item.json.strikes }}S",
-          "predicted_type": "={{ $('FastAPI 투구 예측').item.json.predicted_type }}",
-          "probabilities": "={{ $('FastAPI 투구 예측').item.json.probabilities }}",
-          "commentary": "={{ JSON.parse($json.output).commentary }}",
-          "reasoning": "={{ JSON.parse($json.output).reasoning }}",
-          "confidence": "={{ JSON.parse($json.output).confidence }}",
-          "inference_ts": "={{ $now.toISO() }}"
-        },
+        "body": "={{ JSON.stringify($json) }}",
         "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          },
+          "response": { "response": { "neverError": true } },
           "timeout": 3000
         }
       },
-      "id": "node-008-http-webhook",
+      "id": "node-009-http-push",
       "name": "프론트엔드 Push",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1960,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "POST {frontend_webhook_url}\n예측 확률 + AI 해설 실시간 Push\nneverError: true → Push 실패 시에도 파이프라인 중단 없이 계속"
+      "position": [1760, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst payload = $input.first().json;\n\nif (!staticData.prediction_log) staticData.prediction_log = [];\n\nstaticData.prediction_log.push({\n  game_pk:         payload.game_pk,\n  at_bat_number:   payload.at_bat_number,\n  pitch_number:    payload.pitch_number,\n  predicted_pitch: payload.predicted_pitch,\n  confidence:      payload.confidence,\n  actual_pitch:    null,\n  ts:              payload.inference_ts\n});\n\nif (staticData.prediction_log.length > 500) {\n  staticData.prediction_log = staticData.prediction_log.slice(-500);\n}\n\nreturn [{ json: { logged: true, total_predictions: staticData.prediction_log.length } }];"
+      },
+      "id": "node-010-code-log",
+      "name": "예측 로그 기록",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 300]
     },
     {
       "parameters": {
@@ -240,7 +207,7 @@
           "conditions": [
             {
               "id": "cond-game-over",
-              "leftValue": "={{ $('MLB Live Feed').first().json.gameData.status.abstractGameState }}",
+              "leftValue": "={{ $('MLB Live Feed').first().json.gameData?.status?.abstractGameState }}",
               "rightValue": "Final",
               "operator": {
                 "type": "string",
@@ -253,130 +220,54 @@
         },
         "options": {}
       },
-      "id": "node-009-if-gameover",
+      "id": "node-011-if-gameover",
       "name": "경기 종료 감지",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        2240,
-        300
-      ],
-      "notesInFlow": true,
-      "notes": "TRUE  → 경기 종료: 워크플로우 비활성화 권장\n        n8n API: PATCH /api/v1/workflows/{workflowId}/deactivate\nFALSE → 경기 진행 중: 이번 사이클 종료 후 8초 후 재폴링"
+      "position": [2200, 300]
     }
   ],
   "connections": {
     "Schedule Trigger": {
-      "main": [
-        [
-          {
-            "node": "MLB Live Feed",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "game_pk 로드", "type": "main", "index": 0 }]]
+    },
+    "game_pk 로드": {
+      "main": [[{ "node": "MLB Live Feed", "type": "main", "index": 0 }]]
     },
     "MLB Live Feed": {
-      "main": [
-        [
-          {
-            "node": "투구 diff 감지",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "투구 diff 감지", "type": "main", "index": 0 }]]
     },
     "투구 diff 감지": {
-      "main": [
-        [
-          {
-            "node": "신규 투구 여부",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "신규 투구 여부", "type": "main", "index": 0 }]]
     },
     "신규 투구 여부": {
       "main": [
-        [
-          {
-            "node": "FastAPI 투구 예측",
-            "type": "main",
-            "index": 0
-          }
-        ],
+        [{ "node": "FastAPI 투구 예측", "type": "main", "index": 0 }],
         []
       ]
     },
     "FastAPI 투구 예측": {
-      "main": [
-        [
-          {
-            "node": "전술 해설 AI Agent",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "전술 해설 AI", "type": "main", "index": 0 }]]
     },
-    "Claude Sonnet": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "전술 해설 AI Agent",
-            "type": "ai_languageModel",
-            "index": 0
-          }
-        ]
-      ]
+    "GPT-4o Mini": {
+      "ai_languageModel": [[{ "node": "전술 해설 AI", "type": "ai_languageModel", "index": 0 }]]
     },
-    "전술 해설 AI Agent": {
-      "main": [
-        [
-          {
-            "node": "프론트엔드 Push",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "전술 해설 AI": {
+      "main": [[{ "node": "Push 페이로드 조립", "type": "main", "index": 0 }]]
+    },
+    "Push 페이로드 조립": {
+      "main": [[{ "node": "프론트엔드 Push", "type": "main", "index": 0 }]]
     },
     "프론트엔드 Push": {
-      "main": [
-        [
-          {
-            "node": "경기 종료 감지",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "예측 로그 기록", "type": "main", "index": 0 }]]
+    },
+    "예측 로그 기록": {
+      "main": [[{ "node": "경기 종료 감지", "type": "main", "index": 0 }]]
     }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "meta": {
-    "templateCredsSetupCompleted": false,
-    "instanceId": "pitchflow-ai"
-  },
-  "id": "pitchflow-in-game-v1",
-  "tags": [
-    {
-      "name": "MLB"
-    },
-    {
-      "name": "in-game"
-    },
-    {
-      "name": "real-time"
-    },
-    {
-      "name": "supabase"
-    }
-  ]
+  "settings": { "executionOrder": "v1" },
+  "meta": { "instanceId": "pitchflow-ai" },
+  "id": "pitchflow-in-game-v2",
+  "tags": [{ "name": "MLB" }, { "name": "in-game" }, { "name": "v2" }]
 }

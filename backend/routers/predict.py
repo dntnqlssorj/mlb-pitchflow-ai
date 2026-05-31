@@ -29,6 +29,96 @@ MODEL_MAP = {
     # ensemble: ml_engine/ensemble.py 경유 (별도 pkl 없음)
 }
 
+# --- PyTorch 시계열 모델 싱글톤 캐시 로더 ---
+_pytorch_models = {}
+
+# --- Stacking 모델 싱글톤 캐시 ---
+_stacking_cache: dict = {}
+
+# --- Per-Pitcher 로컬 모델 싱글톤 캐시 ---
+_per_pitcher_cache: dict = {}
+LOCAL_DIR = MODEL_DIR / "local"
+
+def _get_pytorch_model(model_type: str):
+    global _pytorch_models
+    if model_type in _pytorch_models:
+        return _pytorch_models[model_type]
+
+    import json
+    import torch
+    from pathlib import Path
+
+    MODEL_DIR = Path("ml_engine/models")
+    params_path = MODEL_DIR / f"best_params_{model_type}.json"
+    params = {}
+    if params_path.exists():
+        with open(params_path, "r") as f:
+            params = json.load(f)
+
+    # feature_dim 확인 (bilstm과 transformer는 동일한 71차원 NN 피처를 공유하므로, bilstm_nn_features.pkl가 없으면 transformer_nn_features.pkl를 공용 로드합니다)
+    nn_feat_path = MODEL_DIR / f"{model_type}_nn_features.pkl"
+    if not nn_feat_path.exists():
+        nn_feat_path = MODEL_DIR / "transformer_nn_features.pkl"
+
+    if not nn_feat_path.exists():
+        from ml_engine.config import ALLOWED_FEATURES
+        nn_features = [f for f in ALLOWED_FEATURES
+                       if f not in ['pitcher','batter','fielder_2','game_year',
+                                    'game_pk','at_bat_number','pitch_number']]
+    else:
+        import joblib
+        nn_features = joblib.load(nn_feat_path)
+    feature_dim = len(nn_features)
+
+    model_path = MODEL_DIR / f"{model_type}_pitch_model.pt"
+
+    # label encoder로 n_classes 확인하되, 실제 저장된 모델 가중치 체크포인트의 최종 레이어 bias 크기를 확인하여 정합성을 일치시킵니다.
+    import joblib
+    le = joblib.load(MODEL_DIR / "label_encoder.pkl")
+    n_classes = len(le.classes_)
+    
+    if model_path.exists():
+        try:
+            checkpoint_sd = torch.load(model_path, map_location="cpu")
+            if "classifier.3.bias" in checkpoint_sd:
+                n_classes = checkpoint_sd["classifier.3.bias"].shape[0]
+        except Exception:
+            pass
+
+    if model_type == "bilstm":
+        from ml_engine.bilstm_model import PitchBiLSTM
+        model = PitchBiLSTM(
+            feature_dim=feature_dim,
+            n_classes=n_classes,
+            hidden_size=params.get("hidden_size", 128),
+            num_layers=params.get("num_layers", 2),
+            dropout=params.get("dropout", 0.3),
+        )
+    elif model_type == "transformer":
+        from ml_engine.transformer_model import PitchTransformer
+        model = PitchTransformer(
+            feature_dim=feature_dim,
+            n_classes=n_classes,
+            d_model=params.get("d_model", 64),
+            nhead=params.get("nhead", 4),
+            num_layers=params.get("num_layers", 2),
+            dim_feedforward=params.get("dim_feedforward", 128),
+            dropout=params.get("dropout", 0.1),
+        )
+    else:
+        raise ValueError(f"지원하지 않는 PyTorch 모델 타입: {model_type}")
+
+    if not model_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=f"PyTorch 모델 가중치 파일 없음: {model_path} — 훈련 먼저 수행 필요"
+        )
+
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    model.eval()
+    _pytorch_models[model_type] = model
+    return model
+
 
 # ==============================================================================
 # 입력 스키마 — 9-식별자 + 경기 상황 (사후 물리 지표 전면 제거)
@@ -161,7 +251,7 @@ def predict_pitch(
     input_data: PitchInferenceInput,
     model_type: str = Query(
         default="xgboost",
-        description="사용할 모델 (xgboost / random_forest / lightgbm / catboost / stacking / ensemble)",
+        description="사용할 모델 (xgboost / random_forest / lightgbm / catboost / stacking / ensemble / bilstm / transformer)",
     ),
 ):
     """
@@ -193,6 +283,7 @@ def predict_pitch(
         on_2b=input_data.on_2b,
         on_3b=input_data.on_3b,
         pitch_count_override=input_data.pitch_count_override,
+        inning=input_data.inning,
     )
     enrichment_latency_ms = enriched.pop("enrichment_latency_ms")
     enrichment_sources    = enriched.pop("enrichment_sources")
@@ -229,26 +320,145 @@ def predict_pitch(
     merged = {**api_dict, **enriched}
 
     # ------------------------------------------------------------------
+    # 시계열 딥러닝 분기 — Bi-LSTM / Transformer 실시간 추론 [신규 추가]
+    # ------------------------------------------------------------------
+    if model_type in ["bilstm", "transformer"]:
+        import torch
+        from backend.services.sequence_builder import build_inference_sequence
+        
+        # 1. 3D 시퀀스 텐서 조립 ([1, 5, D] numpy array)
+        X_seq_np = build_inference_sequence(
+            merged_dict=merged,
+            game_pk=input_data.game_pk,
+            pitcher_id=input_data.pitcher,
+            stand_raw=input_data.stand,
+            model_type=model_type
+        )
+        
+        X_seq_tensor = torch.FloatTensor(X_seq_np)
+        
+        # 2. 모델 로드 및 모델별 클래스 매핑 설정
+        nn_model = _get_pytorch_model(model_type)
+        
+        label_encoder = _load_label_encoder()
+        pitch_classes = label_encoder.classes_
+        
+        # 3. 추론 실행
+        with torch.no_grad():
+            logits = nn_model(X_seq_tensor)
+            probabilities = torch.softmax(logits, dim=1).numpy()[0]
+            
+        prob_dict = {
+            str(pitch_classes[i]): round(float(p), 4)
+            for i, p in enumerate(probabilities)
+        }
+        
+        sorted_probs = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
+        predicted_pitch = max(prob_dict, key=prob_dict.get)
+        
+        return {
+            "model_used":           model_type,
+            "predicted_pitch":      predicted_pitch,
+            "confidence":           sorted_probs[predicted_pitch],
+            "pitch_probabilities":  sorted_probs,
+            "enrichment_latency_ms": enrichment_latency_ms,
+            "enrichment_sources":   enrichment_sources,
+        }
+
+    # ------------------------------------------------------------------
+    # auto 분기 — Per-Pitcher 지역 모델 또는 Stacking fallback 자동 선택
+    # ------------------------------------------------------------------
+    if model_type == "auto":
+        global _per_pitcher_cache
+        pitcher_id = input_data.pitcher
+        local_model_path = LOCAL_DIR / f"{pitcher_id}.pkl"
+        local_le_path    = LOCAL_DIR / f"{pitcher_id}_le.pkl"
+
+        if local_model_path.exists() and local_le_path.exists():
+            # -- Per-Pitcher 로컬 모델 사용
+            cache_key = str(pitcher_id)
+            if cache_key not in _per_pitcher_cache:
+                local_m  = joblib.load(local_model_path)
+                local_le = joblib.load(local_le_path)
+                if hasattr(local_m, "set_params"):
+                    try:
+                        local_m.set_params(n_jobs=1)
+                    except Exception:
+                        pass
+                _per_pitcher_cache[cache_key] = (local_m, local_le)
+
+            local_m, local_le = _per_pitcher_cache[cache_key]
+
+            # 투수별 피처 목록 추론
+            if hasattr(local_m, "feature_names_in_"):
+                feats = list(local_m.feature_names_in_)
+            else:
+                feats = list(local_m.get_booster().feature_names)
+
+            X_local = _build_feature_vector(merged, feats)
+            local_probs = local_m.predict_proba(X_local)[0]
+
+            prob_dict = {
+                str(local_le.classes_[i]): round(float(p), 4)
+                for i, p in enumerate(local_probs)
+            }
+            sorted_probs    = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
+            predicted_pitch = max(prob_dict, key=prob_dict.get)
+
+            return {
+                "model_used":           "auto",
+                "routing":              "per_pitcher",
+                "pitcher_id":           pitcher_id,
+                "predicted_pitch":      predicted_pitch,
+                "confidence":           sorted_probs[predicted_pitch],
+                "pitch_probabilities":  sorted_probs,
+                "enrichment_latency_ms": enrichment_latency_ms,
+                "enrichment_sources":   enrichment_sources,
+            }
+        else:
+            # -- Stacking fallback
+            model_type = "stacking"
+            # (fallback 에러 스택레이싴 포함 응답을 위해 routing 필드 별도 보존)
+            _auto_fallback_routing = "stacking_fallback"
+    else:
+        _auto_fallback_routing = None
+
+    # ------------------------------------------------------------------
     # 스태킹 분기 — XGBoost + LightGBM + CatBoost Level-1 Stacking
     # ------------------------------------------------------------------
     if model_type == "stacking":
-        meta_path = MODEL_DIR / 'stacking_meta_learner.pkl'
-        paths_path = MODEL_DIR / 'stacking_base_model_paths.pkl'
-        
-        if not meta_path.exists() or not paths_path.exists():
-            raise HTTPException(
-                status_code=503,
-                detail="스태킹 메타러너 모델 또는 경로 정의 파일이 존재하지 않습니다."
-            )
-            
-        meta_learner = joblib.load(meta_path)
-        base_paths = joblib.load(paths_path)
-        
-        # 기저 모델 로드
-        best_xgb = joblib.load(MODEL_DIR / Path(base_paths['xgb']).name)
-        best_lgb = joblib.load(MODEL_DIR / Path(base_paths['lgb']).name)
-        best_cat = joblib.load(MODEL_DIR / Path(base_paths['cat']).name)
-        
+        global _stacking_cache
+        if not _stacking_cache:
+            meta_path = MODEL_DIR / 'stacking_meta_learner.pkl'
+            paths_path = MODEL_DIR / 'stacking_base_model_paths.pkl'
+
+            if not meta_path.exists() or not paths_path.exists():
+                raise HTTPException(
+                    status_code=503,
+                    detail="스태킹 메타러너 모델 또는 경로 정의 파일이 존재하지 않습니다."
+                )
+
+            base_paths = joblib.load(paths_path)
+            _stacking_cache["meta"]     = joblib.load(meta_path)
+            _stacking_cache["xgb"]      = joblib.load(MODEL_DIR / Path(base_paths['xgb']).name)
+            _stacking_cache["lgb"]      = joblib.load(MODEL_DIR / Path(base_paths['lgb']).name)
+            _stacking_cache["cat"]      = joblib.load(MODEL_DIR / Path(base_paths['cat']).name)
+
+        meta_learner = _stacking_cache["meta"]
+        best_xgb     = _stacking_cache["xgb"]
+        best_lgb     = _stacking_cache["lgb"]
+        best_cat     = _stacking_cache["cat"]
+
+        # macOS ARM64 OMP 충돌 방지: 예측 직전 n_jobs 강제 단일 스레드
+        for _m in (best_xgb, best_lgb, best_cat, meta_learner):
+            if hasattr(_m, "n_jobs"):
+                _m.n_jobs = 1
+            if hasattr(_m, "set_params"):
+                try:
+                    _m.set_params(n_jobs=1)
+                except Exception:
+                    pass
+
         # 피처 벡터 구성 및 예측
         xgb_feats = list(best_xgb.feature_names_) if hasattr(best_xgb, 'feature_names_') else list(best_xgb.feature_names_in_)
         lgb_feats = list(best_lgb.feature_names_) if hasattr(best_lgb, 'feature_names_') else list(best_lgb.feature_names_in_)
@@ -277,7 +487,8 @@ def predict_pitch(
         predicted_pitch = max(prob_dict, key=prob_dict.get)
         
         return {
-            "model_used":           "stacking",
+            "model_used":           "stacking" if _auto_fallback_routing is None else "auto",
+            "routing":              _auto_fallback_routing or "stacking",
             "predicted_pitch":      predicted_pitch,
             "confidence":           sorted_probs[predicted_pitch],
             "pitch_probabilities":  sorted_probs,

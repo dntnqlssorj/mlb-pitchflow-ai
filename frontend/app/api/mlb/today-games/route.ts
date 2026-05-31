@@ -1,31 +1,49 @@
 import { NextResponse } from 'next/server';
 
+function getETDate(offsetDays = 0): string {
+  const now = new Date();
+  now.setDate(now.getDate() + offsetDays);
+  const nyDate = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  const [month, day, year] = nyDate.split('/');
+  return `${year}-${month}-${day}`;
+}
+
 export async function GET() {
   try {
-    // Determine the current date in US Eastern Time (New York) to align with MLB schedule timezone
-    const nyDate = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
+    const today = getETDate(0);
+    const yesterday = getETDate(-1);
 
-    const [month, day, year] = nyDate.split('/');
-    const today = `${year}-${month}-${day}`;
+    const [todayRes, yesterdayRes] = await Promise.all([
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${today}`, { next: { revalidate: 15 } }),
+      fetch(`https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${yesterday}`, { next: { revalidate: 15 } }),
+    ]);
 
-    const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&date=${today}`;
-    const res = await fetch(url, { next: { revalidate: 15 } });
+    const [todayData, yesterdayData] = await Promise.all([
+      todayRes.ok ? todayRes.json() : { dates: [] },
+      yesterdayRes.ok ? yesterdayRes.json() : { dates: [] },
+    ]);
 
-    if (!res.ok) {
-      throw new Error(`MLB Stats API schedule returned status: ${res.status}`);
-    }
+    const todayGames = todayData.dates?.[0]?.games || [];
+    const yesterdayGames = yesterdayData.dates?.[0]?.games || [];
+    const allGames = [...todayGames, ...yesterdayGames];
 
-    const data = await res.json();
-    const gamesList = data.dates?.[0]?.games || [];
-
-    // Filter out games that have already finished (Final status)
-    const activeGames = gamesList
-      .filter((g: any) => g.status.abstractGameState !== 'Final')
+    // Live 진행 중 경기만 반환 (Preview/Final 제외)
+    const seenPks = new Set<number>();
+    const activeGames = allGames
+      .filter((g: any) => {
+        const isLive = g.status.abstractGameState === 'Live';
+        const isDupe = seenPks.has(g.gamePk);
+        if (isLive && !isDupe) {
+          seenPks.add(g.gamePk);
+          return true;
+        }
+        return false;
+      })
       .map((g: any) => ({
         gamePk: g.gamePk,
         awayTeam: g.teams.away.team.name,

@@ -1,0 +1,10 @@
+{
+    "d_model": 32,
+    "nhead": 4,
+    "num_layers": 1,
+    "dim_feedforward": 256,
+    "dropout": 0.11469499540000423,
+    "learning_rate": 0.0013353819088790589,
+    "batch_size": 512,
+    "sequence_length": 10
+}

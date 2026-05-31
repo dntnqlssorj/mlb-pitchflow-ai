@@ -23,6 +23,7 @@ def build_enrichment_cache():
         (row.pitcher, row.game_year): {
             "base_speed": row.season_avg_speed,
             "base_spin": row.season_avg_spin,
+            "p_throws": row.p_throws,
         }
         for _, row in baseline.iterrows()
     }
