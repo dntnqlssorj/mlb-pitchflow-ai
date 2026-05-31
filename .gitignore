@@ -30,3 +30,10 @@ saved_models/cache_matrix/*
 
 # 머신러닝 학습 임시 로그
 catboost_info/
+
+# 임시 파일 및 로그
+*.log
+models.zip
+scratch/
+MLB-PitchFlow-AI/
+
