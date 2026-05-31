@@ -54,7 +54,7 @@ export default function CustomPage() {
     }
   }
 
-  const sortedProbs = result
+  const sortedProbs = result?.pitch_probabilities
     ? Object.entries(result.pitch_probabilities)
         .filter(([, v]) => (v ?? 0) > 0)
         .sort(([, a], [, b]) => (b ?? 0) - (a ?? 0))
