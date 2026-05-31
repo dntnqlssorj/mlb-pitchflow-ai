@@ -7,17 +7,19 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 0 * * *"
+              "expression": "0 0 0,7,9,11 * * *"
             }
           ]
-        },
-        "timezone": "Asia/Seoul"
+        }
       },
-      "id": "node-001-schedule",
+      "id": "a327b504-5e32-4e0b-ba16-c7e1656d243d",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [0, 300],
+      "position": [
+        -1536,
+        144
+      ],
       "notesInFlow": true,
       "notes": "매일 KST 00:00 실행\nMLB 경기는 ET 기준이므로 날짜 쿼리 시 ET 변환 필요\n(KST 00:00 = ET 전날 10~11시)"
     },
@@ -25,36 +27,54 @@
       "parameters": {
         "jsCode": "// KST 00:00 기준으로 오늘 ET 날짜 계산\n// KST는 UTC+9, ET는 UTC-4(서머타임) 또는 UTC-5\n// KST - 13시간 = ET (서머타임 기준)\nconst now = new Date();\nconst etOffset = 13; // KST to ET (서머타임)\nconst etDate = new Date(now.getTime() - etOffset * 60 * 60 * 1000);\nconst year  = etDate.getUTCFullYear();\nconst month = String(etDate.getUTCMonth() + 1).padStart(2, '0');\nconst day   = String(etDate.getUTCDate()).padStart(2, '0');\nconst dateStr = `${year}-${month}-${day}`;\n\nreturn [{ json: { query_date: dateStr } }];"
       },
-      "id": "node-002-code-date",
+      "id": "27a47ec6-cd6e-40bc-8249-e6820dbd491b",
       "name": "ET 날짜 계산",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 300],
+      "position": [
+        -1328,
+        144
+      ],
       "notesInFlow": true,
       "notes": "KST 00:00 → ET 날짜 변환\nMLB Stats API는 ET 기준 날짜를 사용\n서머타임(EDT): KST-13h / 표준시(EST): KST-14h\n현재 서머타임 기준 -13h 고정"
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "https://statsapi.mlb.com/api/v1/schedule",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "sportId", "value": "1" },
-            { "name": "date",    "value": "={{ $json.query_date }}" },
-            { "name": "hydrate", "value": "probablePitcher,lineups,teams,venue" }
+            {
+              "name": "sportId",
+              "value": "1"
+            },
+            {
+              "name": "date",
+              "value": "={{ $json.query_date }}"
+            },
+            {
+              "name": "hydrate",
+              "value": "probablePitcher,lineups,teams,venue"
+            }
           ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 10000
         }
       },
-      "id": "node-003-http-schedule",
+      "id": "d6173053-63ab-4e0a-b750-0c43de8663e3",
       "name": "MLB 오늘 경기 목록",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [440, 300],
+      "position": [
+        -1104,
+        144
+      ],
       "notesInFlow": true,
       "notes": "MLB Stats API 공개 엔드포인트 (인증 불필요)\nhydrate=venue 추가 → 구장 ID 포함\nGET https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={ET날짜}"
     },
@@ -62,28 +82,43 @@
       "parameters": {
         "jsCode": "// 오늘 경기 목록 파싱 + 구장 위경도 매핑\nconst STADIUMS = {\n  1:    { name: 'Angel Stadium',         lat: 33.8003,  lng: -117.8827, dome: false },\n  2:    { name: 'Minute Maid Park',       lat: 29.7572,  lng: -95.3555,  dome: true  },\n  3:    { name: 'Guaranteed Rate Field',  lat: 41.8300,  lng: -87.6339,  dome: false },\n  4:    { name: 'Great American Ball Park', lat: 39.0979, lng: -84.5082, dome: false },\n  5:    { name: 'Progressive Field',      lat: 41.4962,  lng: -81.6852,  dome: false },\n  6:    { name: 'Comerica Park',          lat: 42.3390,  lng: -83.0485,  dome: false },\n  7:    { name: 'Kauffman Stadium',       lat: 39.0517,  lng: -94.4803,  dome: false },\n  8:    { name: 'American Family Field',  lat: 43.0280,  lng: -87.9712,  dome: true  },\n  9:    { name: 'Target Field',           lat: 44.9817,  lng: -93.2778,  dome: false },\n  10:   { name: 'Yankee Stadium',         lat: 40.8296,  lng: -73.9262,  dome: false },\n  11:   { name: 'Oakland Coliseum',       lat: 37.7516,  lng: -122.2005, dome: false },\n  12:   { name: 'T-Mobile Park',          lat: 47.5914,  lng: -122.3325, dome: true  },\n  13:   { name: 'Globe Life Field',       lat: 32.7473,  lng: -97.0822,  dome: true  },\n  14:   { name: 'Rogers Centre',          lat: 43.6414,  lng: -79.3894,  dome: true  },\n  15:   { name: 'Nationals Park',         lat: 38.8730,  lng: -77.0074,  dome: false },\n  16:   { name: 'Oriole Park',            lat: 39.2838,  lng: -76.6216,  dome: false },\n  17:   { name: 'Fenway Park',            lat: 42.3467,  lng: -71.0972,  dome: false },\n  19:   { name: 'Wrigley Field',          lat: 41.9484,  lng: -87.6553,  dome: false },\n  20:   { name: 'Great American Ball Park', lat: 39.0979, lng: -84.5082, dome: false },\n  21:   { name: 'Coors Field',            lat: 39.7559,  lng: -104.9942, dome: false },\n  22:   { name: 'Comerica Park',          lat: 42.3390,  lng: -83.0485,  dome: false },\n  23:   { name: 'Truist Park',            lat: 33.8908,  lng: -84.4678,  dome: false },\n  24:   { name: 'loanDepot park',         lat: 25.7781,  lng: -80.2197,  dome: true  },\n  25:   { name: 'American Family Field',  lat: 43.0280,  lng: -87.9712,  dome: true  },\n  26:   { name: 'Busch Stadium',          lat: 38.6226,  lng: -90.1928,  dome: false },\n  27:   { name: 'PNC Park',              lat: 40.4469,  lng: -80.0057,  dome: false },\n  28:   { name: 'Petco Park',             lat: 32.7076,  lng: -117.1570, dome: false },\n  29:   { name: 'Oracle Park',            lat: 37.7786,  lng: -122.3893, dome: false },\n  30:   { name: 'Dodger Stadium',         lat: 34.0739,  lng: -118.2400, dome: false },\n  2392: { name: 'Tropicana Field',        lat: 27.7683,  lng: -82.6534,  dome: true  },\n  2394: { name: 'Citi Field',             lat: 40.7571,  lng: -73.8458,  dome: false },\n  2395: { name: 'Citizens Bank Park',     lat: 39.9061,  lng: -75.1665,  dome: false },\n  2396: { name: 'Chase Field',            lat: 33.4453,  lng: -112.0667, dome: true  },\n  4169: { name: 'Camden Yards',           lat: 39.2838,  lng: -76.6216,  dome: false },\n};\n\nconst data     = $input.first().json;\nconst queryDate = $('ET 날짜 계산').first().json.query_date;\nconst games    = [];\n\nfor (const dateEntry of (data.dates || [])) {\n  for (const game of (dateEntry.games || [])) {\n    if (game.status?.abstractGameState === 'Final') continue;\n\n    const venueId  = game.venue?.id;\n    const stadium  = STADIUMS[venueId] ?? { name: game.venue?.name ?? 'Unknown', lat: null, lng: null, dome: false };\n\n    games.push({\n      game_pk:          game.gamePk,\n      game_date:        dateEntry.date,\n      game_datetime:    game.gameDate,\n      home_team_id:     game.teams?.home?.team?.id,\n      home_team:        game.teams?.home?.team?.name,\n      away_team_id:     game.teams?.away?.team?.id,\n      away_team:        game.teams?.away?.team?.name,\n      status:           game.status?.detailedState,\n      home_pitcher_id:  game.teams?.home?.probablePitcher?.id ?? null,\n      away_pitcher_id:  game.teams?.away?.probablePitcher?.id ?? null,\n      venue_id:         venueId,\n      venue_name:       stadium.name,\n      venue_lat:        stadium.lat,\n      venue_lng:        stadium.lng,\n      venue_dome:       stadium.dome\n    });\n  }\n}\n\nif (games.length === 0) {\n  return [{ json: { skipped: true, reason: '오늘 예정 경기 없음', date: queryDate } }];\n}\n\nconsole.log(`오늘 경기 ${games.length}개 발견`);\nreturn games.map(g => ({ json: g }));"
       },
-      "id": "node-004-code-games",
+      "id": "2fc59045-2370-4bd7-8e7b-c19b80e817df",
       "name": "경기 목록 파싱 + 구장 매핑",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300],
+      "position": [
+        -880,
+        144
+      ],
       "notesInFlow": true,
       "notes": "오늘 경기 파싱 + 구장 위경도 테이블 매핑\n30개 구장 venue_id → lat/lng/dome 매핑\nFinal 상태 경기 제외\n복수 경기 → 각 game_pk 독립 item으로 분기"
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "=https://statsapi.mlb.com/api/v1/game/{{ $json.game_pk }}/boxscore",
         "options": {
-          "response": { "response": { "neverError": true } },
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 2000
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 10000
         }
       },
-      "id": "node-005-http-lineup",
+      "id": "aefe3913-6abb-4e71-9497-3ac09d7f01b3",
       "name": "라인업 조회",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [880, 300],
+      "position": [
+        -656,
+        144
+      ],
       "notesInFlow": true,
       "notes": "game_pk별 boxscore 조회\n선발 투수 / 타순 / 포수 / 야수 ID 수집\nNode 4 item 수만큼 병렬 실행"
     },
@@ -91,61 +126,92 @@
       "parameters": {
         "jsCode": "// 선수 ID 추출 (투수/포수/야수/타선)\nconst boxscore = $input.first().json;\nconst gameInfo = $('경기 목록 파싱 + 구장 매핑').item.json;\n\nconst result = [];\n\nfor (const side of ['home', 'away']) {\n  const team = boxscore.teams?.[side];\n  if (!team) continue;\n\n  const pitcherIds        = team.pitchers || [];\n  const startingPitcherId = pitcherIds[0] ?? gameInfo[`${side === 'home' ? 'home' : 'away'}_pitcher_id`];\n  if (!startingPitcherId) continue;\n\n  let   catcherId  = null;\n  const fielderIds = [];\n  const batterIds  = [];\n\n  for (const playerId of (team.battingOrder || [])) {\n    const player  = team.players?.[`ID${playerId}`];\n    const posCode = player?.position?.code;\n    const batSide = player?.batSide?.code ?? 'R';\n\n    batterIds.push({\n      batter_id:   playerId,\n      batter_name: player?.person?.fullName ?? '',\n      bat_side:    batSide,\n      position:    player?.position?.abbreviation ?? ''\n    });\n\n    if (posCode === '2') catcherId = playerId;\n    const posNum = parseInt(posCode);\n    if (posNum >= 3 && posNum <= 9) fielderIds.push(playerId);\n  }\n\n  result.push({\n    json: {\n      game_pk:          gameInfo.game_pk,\n      game_date:        gameInfo.game_date,\n      game_datetime:    gameInfo.game_datetime,\n      side:             side,\n      pitcher_id:       startingPitcherId,\n      catcher_id:       catcherId,\n      fielder_ids:      fielderIds,\n      batter_ids:       batterIds,\n      venue_name:       gameInfo.venue_name,\n      venue_lat:        gameInfo.venue_lat,\n      venue_lng:        gameInfo.venue_lng,\n      venue_dome:       gameInfo.venue_dome,\n      home_team:        gameInfo.home_team,\n      away_team:        gameInfo.away_team\n    }\n  });\n}\n\nreturn result;"
       },
-      "id": "node-006-code-players",
+      "id": "d2aa47cb-d4b6-4bab-a5e8-cadd2b3e3239",
       "name": "선수 ID 추출",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 300],
+      "position": [
+        -448,
+        144
+      ],
       "notesInFlow": true,
       "notes": "선발 투수 / 포수 / 야수 / 타선 전체 ID 추출\n타선: batter_id + 좌우타 정보 포함\n홈/원정 각각 독립 item 반환"
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "id": "cond-dome",
               "leftValue": "={{ $json.venue_dome }}",
               "rightValue": false,
-              "operator": { "type": "boolean", "operation": "equal" }
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
             }
           ],
           "combinator": "and"
         },
         "options": {}
       },
-      "id": "node-007-if-dome",
+      "id": "a66c7815-e35d-4af9-b103-d9124f60b774",
       "name": "돔 구장 여부",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1320, 300],
+      "position": [
+        -224,
+        144
+      ],
       "notesInFlow": true,
       "notes": "TRUE (돔 아님) → 날씨 API 호출\nFALSE (돔)     → 날씨 스킵, 기본값 사용\n돔 구장: Minute Maid, Rogers Centre, Tropicana 등"
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "https://api.tomorrow.io/v1/weather/realtime",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "location", "value": "={{ $json.venue_lat }},{{ $json.venue_lng }}" },
-            { "name": "fields",   "value": "temperature,humidity,windSpeed,windDirection,precipitationProbability" },
-            { "name": "units",    "value": "metric" },
-            { "name": "apikey",   "value": "={{ $vars.tomorrow_api_key }}" }
+            {
+              "name": "location",
+              "value": "={{ $json.venue_lat }},{{ $json.venue_lng }}"
+            },
+            {
+              "name": "fields",
+              "value": "temperature,humidity,windSpeed,windDirection,precipitationProbability"
+            },
+            {
+              "name": "units",
+              "value": "metric"
+            },
+            {
+              "name": "apikey",
+              "value": "={{ $vars.tomorrow_api_key }}"
+            }
           ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 8000
         }
       },
-      "id": "node-008-http-weather",
+      "id": "5abd5fca-484e-46ac-b4d4-586608f66c21",
       "name": "날씨 조회",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1540, 160],
+      "position": [
+        0,
+        0
+      ],
       "notesInFlow": true,
       "notes": "Tomorrow.io Realtime API\n구장 위경도 기반 현재 날씨 조회\n무료 플랜: 하루 500 콜 (경기 수 기준 충분)\n필요 변수: tomorrow_api_key (n8n 워크플로우 변수 설정)"
     },
@@ -153,11 +219,14 @@
       "parameters": {
         "jsCode": "// 돔 구장 기본 날씨값 설정\nconst gameInfo = $input.first().json;\nreturn [{\n  json: {\n    ...gameInfo,\n    weather: {\n      temperature:              22,\n      humidity:                 50,\n      windSpeed:                0,\n      windDirection:            0,\n      precipitationProbability: 0,\n      dome:                     true\n    }\n  }\n}];"
       },
-      "id": "node-009-code-dome-weather",
+      "id": "30087696-3de1-4aab-b460-7152b10e4ba1",
       "name": "돔 기본값",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 440],
+      "position": [
+        96,
+        288
+      ],
       "notesInFlow": true,
       "notes": "돔 구장은 날씨 영향 없음\n온도 22도 / 바람 0 / 강수 0 기본값 설정"
     },
@@ -165,277 +234,527 @@
       "parameters": {
         "jsCode": "// 날씨 응답 정규화\nconst gameInfo = $('선수 ID 추출').item.json;\nconst weatherRaw = $input.first().json;\n\nconst values = weatherRaw?.data?.values ?? {};\n\nreturn [{\n  json: {\n    ...gameInfo,\n    weather: {\n      temperature:              values.temperature              ?? null,\n      humidity:                 values.humidity                 ?? null,\n      windSpeed:                values.windSpeed                ?? null,\n      windDirection:            values.windDirection            ?? null,\n      precipitationProbability: values.precipitationProbability ?? null,\n      dome:                     false\n    }\n  }\n}];"
       },
-      "id": "node-010-code-weather-parse",
+      "id": "52a18785-5d7f-4c91-9470-29576929801b",
       "name": "날씨 데이터 정규화",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1760, 160],
+      "position": [
+        224,
+        0
+      ],
       "notesInFlow": true,
       "notes": "Tomorrow.io 응답 → 표준 weather 객체로 변환\nnull 안전 처리 포함"
     },
     {
       "parameters": {
-        "mode": "chooseBranch",
-        "output": "input1"
-      },
-      "id": "node-011-merge",
-      "name": "날씨 병합",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3,
-      "position": [1980, 300],
-      "notesInFlow": true,
-      "notes": "돔/오픈에어 두 분기를 하나로 합침\n이후 노드는 동일한 weather 구조로 처리"
-    },
-    {
-      "parameters": {
-        "method": "GET",
         "url": "=https://statsapi.mlb.com/api/v1/people/{{ $json.pitcher_id }}/stats",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "stats",     "value": "gameLog" },
-            { "name": "gameType",  "value": "R" },
-            { "name": "group",     "value": "pitching" },
-            { "name": "season",    "value": "2026" },
-            { "name": "limit",     "value": "5" }
+            {
+              "name": "stats",
+              "value": "gameLog"
+            },
+            {
+              "name": "gameType",
+              "value": "R"
+            },
+            {
+              "name": "group",
+              "value": "pitching"
+            },
+            {
+              "name": "season",
+              "value": "2026"
+            },
+            {
+              "name": "limit",
+              "value": "5"
+            }
           ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 8000
         }
       },
-      "id": "node-012-http-pitcher-stats",
+      "id": "60650451-8268-4919-b4a0-96e1d1de71b3",
       "name": "투수 최근 5경기 성적",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2200, 300],
+      "position": [
+        512,
+        144
+      ],
       "notesInFlow": true,
       "notes": "선발 투수 최근 5경기 투구 성적\nIP / K / BB / ERA / 피안타 등\n구종 비율은 별도 Savant 데이터 필요 (현재 미포함)"
     },
     {
       "parameters": {
-        "jsCode": "// 타선 vs 선발 투수 상대전적 + 최근 성적 병렬 수집 준비\n// 타선 배열을 개별 item으로 분리\nconst gameInfo = $('날씨 병합').item.json;\nconst batters  = gameInfo.batter_ids || [];\n\nif (batters.length === 0) {\n  return [{ json: { ...gameInfo, batter_stats_ready: false } }];\n}\n\n// 각 타자를 독립 item으로 → 다음 노드에서 병렬 API 호출\nreturn batters.map(b => ({\n  json: {\n    game_pk:     gameInfo.game_pk,\n    pitcher_id:  gameInfo.pitcher_id,\n    batter_id:   b.batter_id,\n    batter_name: b.batter_name,\n    bat_side:    b.bat_side,\n    // 컨텍스트 전달용\n    game_context: {\n      game_pk:      gameInfo.game_pk,\n      game_date:    gameInfo.game_date,\n      side:         gameInfo.side,\n      home_team:    gameInfo.home_team,\n      away_team:    gameInfo.away_team,\n      venue_name:   gameInfo.venue_name,\n      venue_dome:   gameInfo.venue_dome,\n      weather:      gameInfo.weather,\n      pitcher_id:   gameInfo.pitcher_id,\n      catcher_id:   gameInfo.catcher_id,\n      fielder_ids:  gameInfo.fielder_ids,\n      batter_ids:   gameInfo.batter_ids\n    }\n  }\n}));"
+        "jsCode": "// 타선 vs 선발 투수 상대전적 + 최근 성적 병렬 수집 준비\n// 타선 배열을 개별 item으로 분리\nconst gameInfo = $('선수 ID 추출').item.json;\nconst batters  = gameInfo.batter_ids || [];\n\nif (batters.length === 0) {\n  return [{ json: { ...gameInfo, batter_stats_ready: false } }];\n}\n\n// 각 타자를 독립 item으로 → 다음 노드에서 병렬 API 호출\nreturn batters.map(b => ({\n  json: {\n    game_pk:     gameInfo.game_pk,\n    pitcher_id:  gameInfo.pitcher_id,\n    batter_id:   b.batter_id,\n    batter_name: b.batter_name,\n    bat_side:    b.bat_side,\n    // 컨텍스트 전달용\n    game_context: {\n      game_pk:      gameInfo.game_pk,\n      game_date:    gameInfo.game_date,\n      side:         gameInfo.side,\n      home_team:    gameInfo.home_team,\n      away_team:    gameInfo.away_team,\n      venue_name:   gameInfo.venue_name,\n      venue_dome:   gameInfo.venue_dome,\n      weather:      gameInfo.weather,\n      pitcher_id:   gameInfo.pitcher_id,\n      catcher_id:   gameInfo.catcher_id,\n      fielder_ids:  gameInfo.fielder_ids,\n      batter_ids:   gameInfo.batter_ids\n    }\n  }\n}));"
       },
-      "id": "node-013-code-batter-split",
+      "id": "2847e7a6-d6d4-44e4-8fb9-2acaefdbc7f3",
       "name": "타선 분리",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2420, 300],
+      "position": [
+        816,
+        144
+      ],
       "notesInFlow": true,
       "notes": "타선 9명을 독립 item으로 분리\n다음 두 HTTP 노드가 타자별 병렬 호출\ngame_context 전달로 이후 집계 시 참조 가능"
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "=https://statsapi.mlb.com/api/v1/people/{{ $json.batter_id }}/stats",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "stats",     "value": "lastXGames" },
-            { "name": "gameType",  "value": "R" },
-            { "name": "group",     "value": "hitting" },
-            { "name": "limit",     "value": "7" }
+            {
+              "name": "stats",
+              "value": "lastXGames"
+            },
+            {
+              "name": "gameType",
+              "value": "R"
+            },
+            {
+              "name": "group",
+              "value": "hitting"
+            },
+            {
+              "name": "limit",
+              "value": "7"
+            }
           ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "batching": {
+            "batch": {
+              "batchSize": 2
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 8000
         }
       },
-      "id": "node-014-http-batter-recent",
+      "id": "0e415265-9422-42f6-819b-3d10910a745c",
       "name": "타자 최근 7일 성적",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2640, 160],
+      "position": [
+        1104,
+        0
+      ],
       "notesInFlow": true,
       "notes": "타자 최근 7경기 타격 성적\n타율 / 출루율 / 장타율 / 삼진율 포함\n9명 × 2팀 = 최대 18 API 호출 (병렬)"
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "=https://statsapi.mlb.com/api/v1/people/{{ $json.batter_id }}/stats",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "stats",      "value": "vsPlayer" },
-            { "name": "opposingPlayerId", "value": "={{ $json.pitcher_id }}" },
-            { "name": "gameType",   "value": "R" },
-            { "name": "group",      "value": "hitting" }
+            {
+              "name": "stats",
+              "value": "vsPlayer"
+            },
+            {
+              "name": "opposingPlayerId",
+              "value": "={{ $json.pitcher_id }}"
+            },
+            {
+              "name": "gameType",
+              "value": "R"
+            },
+            {
+              "name": "group",
+              "value": "hitting"
+            }
           ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "batching": {
+            "batch": {
+              "batchSize": 2
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 8000
         }
       },
-      "id": "node-015-http-vs-pitcher",
+      "id": "09648d09-00e4-441c-ad95-a5d0aaa5bf6a",
       "name": "타자 vs 투수 상대전적",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2640, 440],
+      "position": [
+        944,
+        512
+      ],
       "notesInFlow": true,
       "notes": "타자 vs 선발 투수 역대 상대 성적\n타율 / 홈런 / 삼진 등 포함\n9명 × 2팀 = 최대 18 API 호출 (병렬)"
     },
     {
       "parameters": {
-        "jsCode": "// 타자별 최근 성적 + 상대전적 집계\n// 이 노드는 타자 전체 처리 후 game_pk 기준으로 집계\nconst items = $input.all();\n\n// game_pk 기준 그룹핑\nconst grouped = {};\n\nfor (const item of items) {\n  const d = item.json;\n  const key = d.game_context?.game_pk;\n  if (!key) continue;\n\n  if (!grouped[key]) {\n    grouped[key] = {\n      game_context: d.game_context,\n      batter_profiles: []\n    };\n  }\n\n  // 최근 성적 파싱\n  const recentStats = d.recent_splits?.[0]?.stat ?? {};\n  // 상대전적 파싱\n  const vsStats = d.vs_splits?.[0]?.stat ?? {};\n\n  grouped[key].batter_profiles.push({\n    batter_id:    d.batter_id,\n    batter_name:  d.batter_name,\n    bat_side:     d.bat_side,\n    recent_7days: {\n      avg:  recentStats.avg  ?? '.000',\n      ops:  recentStats.ops  ?? '.000',\n      strikeOutRate: recentStats.strikeOuts && recentStats.plateAppearances\n        ? (recentStats.strikeOuts / recentStats.plateAppearances).toFixed(3)\n        : '0.000',\n      hits:         recentStats.hits         ?? 0,\n      homeRuns:     recentStats.homeRuns      ?? 0,\n      rbi:          recentStats.rbi           ?? 0\n    },\n    vs_pitcher: {\n      avg:      vsStats.avg      ?? '.000',\n      atBats:   vsStats.atBats   ?? 0,\n      hits:     vsStats.hits     ?? 0,\n      homeRuns: vsStats.homeRuns ?? 0,\n      strikeOuts: vsStats.strikeOuts ?? 0\n    }\n  });\n}\n\nreturn Object.values(grouped).map(g => ({ json: g }));"
+        "jsCode": "// 타자별 최근 성적 + 상대전적 집계\nconst recentItems = $('타자 최근 7일 성적').all();\nconst vsItems = [];\nconst batterItems = $('타선 분리').all();\n\n// 선수 ID 추출에서 game_context 가져오기\nconst playerData  = $('선수 ID 추출').first().json;\n\nconst gameContext = {\n  game_pk:      playerData.game_pk,\n  game_date:    playerData.game_date,\n  game_datetime: playerData.game_datetime,\n  side:         playerData.side,\n  home_team:    playerData.home_team,\n  away_team:    playerData.away_team,\n  venue_name:   playerData.venue_name,\n  venue_dome:   playerData.venue_dome,\n  weather:      playerData.weather ?? {},\n  pitcher_id:   playerData.pitcher_id,\n  catcher_id:   playerData.catcher_id,\n  fielder_ids:  playerData.fielder_ids,\n  batter_ids:   playerData.batter_ids\n};\n\n// 타자 ID 기준으로 성적 매핑\nconst batterProfiles = [];\n\nfor (let i = 0; i < batterItems.length; i++) {\n  const batter = batterItems[i].json;\n  const recent = recentItems[i]?.json ?? {};\n  const vs     = vsItems[i]?.json ?? {};\n\n  const recentStat = recent.stats?.[0]?.splits?.[0]?.stat ?? {};\n  const vsStat     = vs.stats?.[0]?.splits?.[0]?.stat ?? {};\n\n  batterProfiles.push({\n    batter_id:   batter.batter_id,\n    batter_name: batter.batter_name,\n    bat_side:    batter.bat_side,\n    recent_7days: {\n      avg:        recentStat.avg        ?? '.000',\n      ops:        recentStat.ops        ?? '.000',\n      hits:       recentStat.hits       ?? 0,\n      homeRuns:   recentStat.homeRuns   ?? 0,\n      strikeOuts: recentStat.strikeOuts ?? 0,\n      gamesPlayed: recentStat.gamesPlayed ?? 0\n    },\n    vs_pitcher: {\n      avg:        vsStat.avg        ?? '.000',\n      atBats:     vsStat.atBats     ?? 0,\n      hits:       vsStat.hits       ?? 0,\n      homeRuns:   vsStat.homeRuns   ?? 0,\n      strikeOuts: vsStat.strikeOuts ?? 0\n    }\n  });\n}\n\nreturn [{\n  json: {\n    game_pk:         gameContext.game_pk,\n    game_context:    gameContext,\n    batter_profiles: batterProfiles\n  }\n}];"
       },
-      "id": "node-016-code-batter-aggregate",
+      "id": "b183b430-f660-4fcf-809f-90001d1a180b",
       "name": "타자 데이터 집계",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2860, 300],
+      "position": [
+        1328,
+        144
+      ],
       "notesInFlow": true,
       "notes": "타자별 최근 성적 + 상대전적 집계\ngame_pk 기준으로 그룹핑\n이후 AI 프롬프트에 한 번에 주입"
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=## 오늘 경기 사전 전술 분석 요청\n\n### 경기 정보\n- game_pk: {{ $json.game_context.game_pk }}\n- 홈팀: {{ $json.game_context.home_team }}\n- 원정팀: {{ $json.game_context.away_team }}\n- 구장: {{ $json.game_context.venue_name }}\n- 돔 여부: {{ $json.game_context.venue_dome }}\n\n### 날씨 정보\n- 기온: {{ $json.game_context.weather.temperature }}°C\n- 습도: {{ $json.game_context.weather.humidity }}%\n- 풍속: {{ $json.game_context.weather.windSpeed }}m/s\n- 풍향: {{ $json.game_context.weather.windDirection }}°\n- 강수 확률: {{ $json.game_context.weather.precipitationProbability }}%\n\n### 선발 투수 ID\n{{ $json.game_context.pitcher_id }}\n\n### 타선 구성 및 최근 성적\n{{ JSON.stringify($json.batter_profiles, null, 2) }}\n\n위 데이터를 분석하여 오늘 경기 전술 컨텍스트 JSON을 반환해라.",
+        "text": "=## 오늘 경기 사전 전술 분석 요청\n\n### 타선 데이터\n{{ JSON.stringify($json.batter_profiles, null, 2) }}\n\n위 데이터를 분석하여 오늘 경기 전술 컨텍스트 JSON을 반환해라.",
         "options": {
           "systemMessage": "너는 MLB 투구 전술 분석 전문가다.\n날씨, 타선 구성, 최근 성적, 상대전적을 종합하여\n오늘 경기 투구 전술 컨텍스트를 분석해라.\n한국어로 작성해라.\n추측하지 마라. 데이터 기반으로만 분석해라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"context_summary\": \"string\",\n  \"weather_impact\": \"string\",\n  \"key_matchups\": [\"string\"],\n  \"hot_batters\": [\"string\"],\n  \"cold_batters\": [\"string\"],\n  \"recommended_focus\": \"string\"\n}"
         }
       },
-      "id": "node-017-ai-analysis",
+      "id": "ae446582-3c3a-4c07-b4a5-027f6a5f4656",
       "name": "전술 분석 AI",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
-      "position": [3080, 300],
+      "position": [
+        1552,
+        144
+      ],
       "notesInFlow": true,
       "notes": "OpenAI gpt-4o-mini (하위 노드로 연결)\n날씨 + 타선 성적 + 상대전적 종합 분석\n출력: context_summary / weather_impact / key_matchups 등"
     },
     {
       "parameters": {
-        "model": "gpt-4o-mini",
-        "options": {
-          "maxTokens": 1024,
-          "temperature": 0.2
-        }
+        "jsCode": "const aggregate = $('타자 데이터 집계').item.json;\nconst aiRaw = $input.first().json.output ?? '{}';\n\nlet aiAnalysis;\ntry {\n  aiAnalysis = JSON.parse(aiRaw);\n} catch (e) {\n  aiAnalysis = { context_summary: aiRaw, weather_impact: '', key_matchups: [], hot_batters: [], cold_batters: [], recommended_focus: '' };\n}\n\nconst context = {\n  game_pk:         aggregate.game_pk,\n  game_date:       aggregate.game_context?.game_date,\n  game_datetime:   aggregate.game_context?.game_datetime,\n  home_team:       aggregate.game_context?.home_team,\n  away_team:       aggregate.game_context?.away_team,\n  venue_name:      aggregate.game_context?.venue_name,\n  venue_dome:      aggregate.game_context?.venue_dome,\n  weather:         aggregate.game_context?.weather,\n  pitcher_id:      aggregate.game_context?.pitcher_id,\n  catcher_id:      aggregate.game_context?.catcher_id,\n  fielder_ids:     aggregate.game_context?.fielder_ids,\n  batter_profiles: aggregate.batter_profiles,\n  ai_analysis:     aiAnalysis,\n  created_at:      new Date().toISOString()\n};\n\n// fs 대신 Static Data에 저장\nconst staticData = $getWorkflowStaticData('global');\nstaticData[`context_${context.game_pk}`] = context;\n\nconsole.log(`컨텍스트 저장 완료: game_pk=${context.game_pk}`);\n\nreturn [{ json: { success: true, game_pk: context.game_pk, context } }];"
       },
-      "id": "node-017a-openai-model",
-      "name": "GPT-4o Mini",
-      "type": "@n8n/n8n-nodes-langchain.lmOpenAi",
-      "typeVersion": 1.2,
-      "position": [3080, 540],
-      "credentials": {
-        "openAiApi": {
-          "id": "OPENAI_CREDENTIAL_ID",
-          "name": "OpenAI account"
-        }
-      },
-      "notesInFlow": true,
-      "notes": "전술 분석 AI Agent의 Language Model\n※ OpenAI API 자격증명 연결 필요"
-    },
-    {
-      "parameters": {
-        "jsCode": "// 최종 컨텍스트 조립 + 파일 저장\nconst aggregate = $('타자 데이터 집계').item.json;\nconst aiRaw     = $input.first().json.output ?? '{}';\n\nlet aiAnalysis;\ntry {\n  aiAnalysis = JSON.parse(aiRaw);\n} catch (e) {\n  aiAnalysis = { context_summary: aiRaw, weather_impact: '', key_matchups: [], hot_batters: [], cold_batters: [], recommended_focus: '' };\n}\n\nconst context = {\n  game_pk:        aggregate.game_context.game_pk,\n  game_date:      aggregate.game_context.game_date,\n  game_datetime:  aggregate.game_context.game_datetime,\n  home_team:      aggregate.game_context.home_team,\n  away_team:      aggregate.game_context.away_team,\n  venue_name:     aggregate.game_context.venue_name,\n  venue_dome:     aggregate.game_context.venue_dome,\n  weather:        aggregate.game_context.weather,\n  pitcher_id:     aggregate.game_context.pitcher_id,\n  catcher_id:     aggregate.game_context.catcher_id,\n  fielder_ids:    aggregate.game_context.fielder_ids,\n  batter_profiles: aggregate.batter_profiles,\n  ai_analysis:    aiAnalysis,\n  created_at:     new Date().toISOString()\n};\n\n// 파일 경로: /tmp/pitchflow_context_{game_pk}.json\nconst filePath = `/tmp/pitchflow_context_${context.game_pk}.json`;\nconst fs = require('fs');\nfs.writeFileSync(filePath, JSON.stringify(context, null, 2), 'utf8');\n\nconsole.log(`컨텍스트 저장 완료: ${filePath}`);\n\nreturn [{ json: { success: true, game_pk: context.game_pk, file_path: filePath, context } }];"
-      },
-      "id": "node-018-code-save",
+      "id": "802aad78-9d2c-460f-aa67-a01e42d4a563",
       "name": "컨텍스트 저장",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [3300, 300],
+      "position": [
+        1888,
+        144
+      ],
       "notesInFlow": true,
       "notes": "최종 컨텍스트 JSON 파일로 저장\n경로: /tmp/pitchflow_context_{game_pk}.json\nIn-game 워크플로우에서 이 파일 참조"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $vars.n8n_base_url }}/api/v1/workflows/{{ $vars.ingame_workflow_id }}/activate",
+        "url": "=http://localhost:5678/api/v1/workflows/hkSsKOCdtBN031HP/activate",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "X-N8N-API-KEY", "value": "={{ $vars.n8n_api_key }}" }
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmZTA4OThhZC05OTFiLTQxMmYtOGRmYi1kODA5YjE3ZjRlN2UiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwianRpIjoiMzY3YzJiZWEtMTdiMi00YTQyLWIyNWQtZTM3NTNiZjg4ZjMyIiwiaWF0IjoxNzgwMjQzNzk1fQ.VexO2D5FNcDCLs_GhjMC-RiKXPu0nWb0hGrguDhtK0c"
+            }
           ]
         },
         "sendBody": true,
-        "contentType": "json",
-        "body": {
-          "game_pk": "={{ $json.game_pk }}"
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
         },
         "options": {
-          "response": { "response": { "neverError": true } },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
           "timeout": 5000
         }
       },
-      "id": "node-019-http-trigger-ingame",
+      "id": "8aeee324-a647-4d93-8ad2-9212660ce68e",
       "name": "In-game 워크플로우 트리거",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [3520, 300],
+      "position": [
+        2160,
+        144
+      ],
       "notesInFlow": true,
       "notes": "컨텍스트 저장 완료 후 In-game 워크플로우 자동 활성화\n필요 변수:\n  n8n_base_url        = http://localhost:5678\n  ingame_workflow_id  = In-game 워크플로우 ID\n  n8n_api_key         = n8n API Key (Settings → API)\n※ n8n API 활성화 필요 (Settings → n8n API)"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1552,
+        336
+      ],
+      "id": "52fd67f9-370c-42fb-87ff-77cfd1abecec",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "4a37ahBgw0E8B1RJ",
+          "name": "OpenAI account"
+        }
+      }
     }
   ],
+  "pinData": {},
   "connections": {
     "Schedule Trigger": {
-      "main": [[{ "node": "ET 날짜 계산", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "ET 날짜 계산",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "ET 날짜 계산": {
-      "main": [[{ "node": "MLB 오늘 경기 목록", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "MLB 오늘 경기 목록",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "MLB 오늘 경기 목록": {
-      "main": [[{ "node": "경기 목록 파싱 + 구장 매핑", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "경기 목록 파싱 + 구장 매핑",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "경기 목록 파싱 + 구장 매핑": {
-      "main": [[{ "node": "라인업 조회", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "라인업 조회",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "라인업 조회": {
-      "main": [[{ "node": "선수 ID 추출", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "선수 ID 추출",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "선수 ID 추출": {
-      "main": [[{ "node": "돔 구장 여부", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "돔 구장 여부",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "돔 구장 여부": {
       "main": [
-        [{ "node": "날씨 조회", "type": "main", "index": 0 }],
-        [{ "node": "돔 기본값", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "날씨 조회",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "돔 기본값",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "날씨 조회": {
-      "main": [[{ "node": "날씨 데이터 정규화", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "날씨 데이터 정규화",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "날씨 데이터 정규화": {
-      "main": [[{ "node": "날씨 병합", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "투수 최근 5경기 성적",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "돔 기본값": {
-      "main": [[{ "node": "날씨 병합", "type": "main", "index": 0 }]]
-    },
-    "날씨 병합": {
-      "main": [[{ "node": "투수 최근 5경기 성적", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "투수 최근 5경기 성적",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "투수 최근 5경기 성적": {
-      "main": [[{ "node": "타선 분리", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "타선 분리",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "타선 분리": {
       "main": [
-        [{ "node": "타자 최근 7일 성적", "type": "main", "index": 0 }],
-        [{ "node": "타자 vs 투수 상대전적", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "타자 최근 7일 성적",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "타자 최근 7일 성적": {
-      "main": [[{ "node": "타자 데이터 집계", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "타자 데이터 집계",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "타자 vs 투수 상대전적": {
-      "main": [[{ "node": "타자 데이터 집계", "type": "main", "index": 0 }]]
+      "main": [
+        []
+      ]
     },
     "타자 데이터 집계": {
-      "main": [[{ "node": "전술 분석 AI", "type": "main", "index": 0 }]]
-    },
-    "GPT-4o Mini": {
-      "ai_languageModel": [[{ "node": "전술 분석 AI", "type": "ai_languageModel", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "전술 분석 AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "전술 분석 AI": {
-      "main": [[{ "node": "컨텍스트 저장", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "컨텍스트 저장",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "컨텍스트 저장": {
-      "main": [[{ "node": "In-game 워크플로우 트리거", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "In-game 워크플로우 트리거",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "전술 분석 AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
-  "settings": { "executionOrder": "v1" },
-  "meta": { "instanceId": "pitchflow-ai" },
-  "id": "pitchflow-pre-game-v2",
-  "tags": [{ "name": "MLB" }, { "name": "pre-game" }, { "name": "v2" }]
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Seoul",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "56cd1c71-2a0f-4442-9f8b-aae19129d96d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e4791dfed7fed1a2dcc7308e6b58671e08764e0ca9fd52110f1e4604e9f8b22d"
+  },
+  "id": "7XACg1Dwe7aOaJou",
+  "tags": [
+    {
+      "updatedAt": "2026-05-30T14:59:00.951Z",
+      "createdAt": "2026-05-30T14:59:00.951Z",
+      "id": "JTYMMxnXS1JkThGc",
+      "name": "pre-game"
+    },
+    {
+      "updatedAt": "2026-05-30T14:59:00.948Z",
+      "createdAt": "2026-05-30T14:59:00.948Z",
+      "id": "LL1KHKMK8G2nGj6v",
+      "name": "v2"
+    },
+    {
+      "updatedAt": "2026-05-30T14:59:00.950Z",
+      "createdAt": "2026-05-30T14:59:00.950Z",
+      "id": "Tt5fUiqTymCjuVUW",
+      "name": "MLB"
+    }
+  ]
 }

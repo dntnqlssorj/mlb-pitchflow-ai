@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional
 from backend.services.enrichment import enrich_pitch_context
+from backend.services.scouting_predictor import predict_with_scouting_llm
 
 router = APIRouter()
 
@@ -256,23 +257,15 @@ def predict_pitch(
 ):
     """
     [구종 예측 엔드포인트 — enrichment 연동 버전]
-    흐름:
-        입력 수신 (9-식별자 + 경기 상황)
-        → 모델 로드
-        → enrich_pitch_context() [Supabase 조회 + 도메인 피처 조립]
-        → 입력 딕셔너리 병합
-        → _build_feature_vector() [학습 피처 정렬 + 0 패딩]
-        → predict_proba
-        → 라벨 디코딩
-        → JSON 반환
     """
-    # --- Enrichment 공통 처리 (ensemble 포함 모든 모델) ---
+    global _per_pitcher_cache, _stacking_cache
     stand_encoded = 0 if input_data.stand.upper() != "L" else 1
     fielder_ids = [
         input_data.fielder_3, input_data.fielder_4, input_data.fielder_5,
         input_data.fielder_6, input_data.fielder_7, input_data.fielder_8,
         input_data.fielder_9,
     ]
+    print(f"[PREDICT] enrichment start")
     enriched = enrich_pitch_context(
         pitcher_id=input_data.pitcher,
         batter_id=input_data.batter,
@@ -284,7 +277,11 @@ def predict_pitch(
         on_3b=input_data.on_3b,
         pitch_count_override=input_data.pitch_count_override,
         inning=input_data.inning,
+        balls=input_data.balls,        
+        strikes=input_data.strikes,    
+        stand=input_data.stand,
     )
+    print(f"[PREDICT] enrichment done: {enriched}")
     enrichment_latency_ms = enriched.pop("enrichment_latency_ms")
     enrichment_sources    = enriched.pop("enrichment_sources")
 
@@ -356,8 +353,9 @@ def predict_pitch(
         sorted_probs = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
         predicted_pitch = max(prob_dict, key=prob_dict.get)
         
-        return {
+        response = {
             "model_used":           model_type,
+            "routing":              "deep_learning",
             "predicted_pitch":      predicted_pitch,
             "confidence":           sorted_probs[predicted_pitch],
             "pitch_probabilities":  sorted_probs,
@@ -368,8 +366,7 @@ def predict_pitch(
     # ------------------------------------------------------------------
     # auto 분기 — Per-Pitcher 지역 모델 또는 Stacking fallback 자동 선택
     # ------------------------------------------------------------------
-    if model_type == "auto":
-        global _per_pitcher_cache
+    elif model_type == "auto":
         pitcher_id = input_data.pitcher
         local_model_path = LOCAL_DIR / f"{pitcher_id}.pkl"
         local_le_path    = LOCAL_DIR / f"{pitcher_id}_le.pkl"
@@ -405,7 +402,7 @@ def predict_pitch(
             sorted_probs    = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
             predicted_pitch = max(prob_dict, key=prob_dict.get)
 
-            return {
+            response = {
                 "model_used":           "auto",
                 "routing":              "per_pitcher",
                 "pitcher_id":           pitcher_id,
@@ -416,18 +413,94 @@ def predict_pitch(
                 "enrichment_sources":   enrichment_sources,
             }
         else:
-            # -- Stacking fallback
-            model_type = "stacking"
-            # (fallback 에러 스택레이싴 포함 응답을 위해 routing 필드 별도 보존)
-            _auto_fallback_routing = "stacking_fallback"
-    else:
-        _auto_fallback_routing = None
+            # -- Scouting LLM Fallback (Before Stacking) --
+            llm_probs = predict_with_scouting_llm(pitcher_id, enriched)
+            if llm_probs is not None:
+                sorted_probs = dict(sorted(llm_probs.items(), key=lambda x: x[1], reverse=True))
+                predicted_pitch = max(llm_probs, key=llm_probs.get)
+                
+                response = {
+                    "model_used":           "auto",
+                    "routing":              "scouting_llm",
+                    "pitcher_id":           pitcher_id,
+                    "predicted_pitch":      predicted_pitch,
+                    "confidence":           sorted_probs[predicted_pitch],
+                    "pitch_probabilities":  sorted_probs,
+                    "enrichment_latency_ms": enrichment_latency_ms,
+                    "enrichment_sources":   enrichment_sources,
+                }
+            else:
+                # -- Stacking fallback
+                model_type = "stacking"
+                _auto_fallback_routing = "stacking_fallback"
+                
+                # 아래 스태킹 코드로 넘겨서 실행하기 위한 로직
+                meta_path = MODEL_DIR / 'stacking_meta_learner.pkl'
+                paths_path = MODEL_DIR / 'stacking_base_model_paths.pkl'
+    
+                if not meta_path.exists() or not paths_path.exists():
+                    raise HTTPException(
+                        status_code=503,
+                        detail="스태킹 메타러너 모델 또는 경로 정의 파일이 존재하지 않습니다."
+                    )
+
+                if not _stacking_cache:
+                    base_paths = joblib.load(paths_path)
+                    _stacking_cache["meta"]     = joblib.load(meta_path)
+                    _stacking_cache["xgb"]      = joblib.load(MODEL_DIR / Path(base_paths['xgb']).name)
+                    _stacking_cache["lgb"]      = joblib.load(MODEL_DIR / Path(base_paths['lgb']).name)
+                    _stacking_cache["cat"]      = joblib.load(MODEL_DIR / Path(base_paths['cat']).name)
+    
+                meta_learner = _stacking_cache["meta"]
+                best_xgb     = _stacking_cache["xgb"]
+                best_lgb     = _stacking_cache["lgb"]
+                best_cat     = _stacking_cache["cat"]
+
+                for _m in (best_xgb, best_lgb, best_cat, meta_learner):
+                    if hasattr(_m, "n_jobs"):
+                        _m.n_jobs = 1
+                    if hasattr(_m, "set_params"):
+                        try: _m.set_params(n_jobs=1)
+                        except Exception: pass
+    
+                xgb_feats = list(best_xgb.feature_names_) if hasattr(best_xgb, 'feature_names_') else list(best_xgb.feature_names_in_)
+                lgb_feats = list(best_lgb.feature_names_) if hasattr(best_lgb, 'feature_names_') else list(best_lgb.feature_names_in_)
+                cat_feats = list(best_cat.feature_names_) if hasattr(best_cat, 'feature_names_') else list(best_cat.feature_names_in_)
+                
+                X_xgb = _build_feature_vector(merged, xgb_feats)
+                X_lgb = _build_feature_vector(merged, lgb_feats)
+                X_cat = _build_feature_vector(merged, cat_feats)
+            
+                prob_xgb = best_xgb.predict_proba(X_xgb)[0]
+                prob_lgb = best_lgb.predict_proba(X_lgb)[0]
+                prob_cat = best_cat.predict_proba(X_cat)[0]
+                
+                X_meta = np.hstack([prob_xgb, prob_lgb, prob_cat]).reshape(1, -1)
+                meta_probs = meta_learner.predict_proba(X_meta)[0]
+                label_encoder = _load_label_encoder()
+                pitch_classes = label_encoder.classes_
+                
+                prob_dict = {
+                    str(pitch_classes[i]): round(float(p), 4)
+                    for i, p in enumerate(meta_probs)
+                }
+                sorted_probs = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
+                predicted_pitch = max(prob_dict, key=prob_dict.get)
+                
+                response = {
+                    "model_used":           "auto",
+                    "routing":              _auto_fallback_routing,
+                    "predicted_pitch":      predicted_pitch,
+                    "confidence":           sorted_probs[predicted_pitch],
+                    "pitch_probabilities":  sorted_probs,
+                    "enrichment_latency_ms": enrichment_latency_ms,
+                    "enrichment_sources":   enrichment_sources,
+                }
 
     # ------------------------------------------------------------------
     # 스태킹 분기 — XGBoost + LightGBM + CatBoost Level-1 Stacking
     # ------------------------------------------------------------------
-    if model_type == "stacking":
-        global _stacking_cache
+    if model_type == "stacking" and 'response' not in locals():
         if not _stacking_cache:
             meta_path = MODEL_DIR / 'stacking_meta_learner.pkl'
             paths_path = MODEL_DIR / 'stacking_base_model_paths.pkl'
@@ -486,9 +559,9 @@ def predict_pitch(
         sorted_probs = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
         predicted_pitch = max(prob_dict, key=prob_dict.get)
         
-        return {
-            "model_used":           "stacking" if _auto_fallback_routing is None else "auto",
-            "routing":              _auto_fallback_routing or "stacking",
+        response = {
+            "model_used":           "stacking",
+            "routing":              "stacking",
             "predicted_pitch":      predicted_pitch,
             "confidence":           sorted_probs[predicted_pitch],
             "pitch_probabilities":  sorted_probs,
@@ -497,38 +570,70 @@ def predict_pitch(
         }
 
     # ------------------------------------------------------------------
-    # 앙상블 분기 — [Bypass Hotfix] ASGI Event Loop 락 완벽 차단
+    # 앙상블 분기 — [Bypass Hotfix] Stacking 모델로 자동 우회
     # ------------------------------------------------------------------
     if model_type == "ensemble":
-        # - 앙상블 라이브러리 임포트 락을 우회하여, 검증 완료된 실전 XGBoost 모델로 자동 전환
         model_type = "xgboost"
 
     # --- 단일 모델 분기 (xgboost / random_forest / lightgbm) ---
-    model         = _load_model(model_type)
-    label_encoder = _load_label_encoder()
-    feature_names = list(model.feature_names_) if hasattr(model, 'feature_names_') else list(model.feature_names_in_)
+    if 'response' not in locals():
+        model         = _load_model(model_type)
+        label_encoder = _load_label_encoder()
+        feature_names = list(model.feature_names_) if hasattr(model, 'feature_names_') else list(model.feature_names_in_)
 
-    # --- 피처 벡터 구성 및 예측 (단일 모델) ---
-    X = _build_feature_vector(merged, feature_names)
+        # --- 피처 벡터 구성 및 예측 (단일 모델) ---
+        X = _build_feature_vector(merged, feature_names)
 
-    probabilities = model.predict_proba(X)[0]
-    pitch_classes = label_encoder.classes_
-    prob_dict     = {
-        str(pitch_classes[i]): round(float(p), 4)
-        for i, p in enumerate(probabilities)
-    }
+        probabilities = model.predict_proba(X)[0]
+        pitch_classes = label_encoder.classes_
+        prob_dict     = {
+            str(pitch_classes[i]): round(float(p), 4)
+            for i, p in enumerate(probabilities)
+        }
 
-    sorted_probs    = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
-    predicted_pitch = max(prob_dict, key=prob_dict.get)
+        sorted_probs    = dict(sorted(prob_dict.items(), key=lambda x: x[1], reverse=True))
+        predicted_pitch = max(prob_dict, key=prob_dict.get)
 
-    return {
-        "model_used":           model_type,
-        "predicted_pitch":      predicted_pitch,
-        "confidence":           sorted_probs[predicted_pitch],
-        "pitch_probabilities":  sorted_probs,
-        "enrichment_latency_ms": enrichment_latency_ms,
-        "enrichment_sources":   enrichment_sources,
-    }
+        response = {
+            "model_used":           model_type,
+            "routing":              "single_model",
+            "predicted_pitch":      predicted_pitch,
+            "confidence":           sorted_probs[predicted_pitch],
+            "pitch_probabilities":  sorted_probs,
+            "enrichment_latency_ms": enrichment_latency_ms,
+            "enrichment_sources":   enrichment_sources,
+        }
+
+    # --- [진단로그 추가] 라우팅 분석 및 클래스 진단 ---
+    label_encoder = locals().get('label_encoder')
+    if label_encoder is None:
+        label_encoder = locals().get('local_le')
+    if label_encoder is None:
+        label_encoder = _load_label_encoder()
+        
+    proba = locals().get('probabilities')
+    if proba is None:
+        proba = locals().get('local_probs')
+    if proba is None:
+        proba = locals().get('meta_probs')
+        
+    proba_list = []
+    if proba is not None:
+        if hasattr(proba, "tolist"):
+            proba_list = proba.tolist()
+        else:
+            proba_list = list(proba)
+
+    print(f"[PREDICT] pitcher_id={input_data.pitcher}")
+    print(f"[PREDICT] routing={response['routing']}")
+    print(f"[PREDICT] model_used={response['model_used']}")
+    print(f"[PREDICT] label_classes={label_encoder.classes_.tolist()}")
+    if len(proba_list) > 0:
+        print(f"[PREDICT] top3={sorted(zip(label_encoder.classes_, proba_list), key=lambda x: -x[1])[:3]}")
+    else:
+        print(f"[PREDICT] top3=No Probabilities Available")
+
+    return response
 
 
 @router.post(

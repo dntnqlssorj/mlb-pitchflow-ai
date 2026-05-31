@@ -115,3 +115,19 @@ export interface LivePredictionEvent {
   reasoning?: string
   inference_ts: string
 }
+
+export interface ArsenalPitch {
+  pitch_type: string
+  name: string
+  pct: number
+  avg_speed: number | null
+  avg_plate_x: number | null
+  avg_plate_z: number | null
+  color: string
+}
+
+export interface PitcherArsenal {
+  pitcher_id: number
+  year: number
+  arsenal: ArsenalPitch[]
+}

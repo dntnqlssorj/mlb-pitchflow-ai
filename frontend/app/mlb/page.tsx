@@ -166,20 +166,7 @@ export default function MLBLivePage() {
 
         {/* ── 중앙 3D 뷰어 ── */}
         <main style={{ flex: 1, position: 'relative', background: '#08090f', minWidth: 0 }}>
-          <LiveSceneViewer predictResult={result} pitcherHand={situation?.pitcherHand} />
-          {!selectedGamePk && (
-            <div style={{
-              position: 'absolute', inset: 0, display: 'flex',
-              flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              color: '#222', gap: '8px', pointerEvents: 'none',
-            }}>
-              <div style={{ fontSize: '48px' }}>⚾</div>
-              <div style={{ fontSize: '14px', fontFamily: "'Bebas Neue', Arial", letterSpacing: '0.15em' }}>
-                LIVE PITCH PREDICTION
-              </div>
-              <div style={{ fontSize: '11px', color: '#1a1a1a' }}>좌측에서 경기를 선택하세요</div>
-            </div>
-          )}
+          <LiveSceneViewer predictResult={result} pitcherHand={situation?.pitcherHand} pitcherId={situation?.currentPitcher?.id || null} year={2026} />
         </main>
 
         {/* ── 우측 — 예측 결과 ── */}

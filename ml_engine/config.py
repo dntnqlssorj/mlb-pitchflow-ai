@@ -1,15 +1,26 @@
 # ==============================================================================
 # MLB PitchFlow AI - ML 파이프라인 전역 설정 상수
-# 변경 이력: 2026-05-21 Target Leakage 제거 및 Chronological Split 전환
+# 변경 이력:
+#   2026-05-21 Target Leakage 제거 및 Chronological Split 전환
+#   2026-05-31 2025 데이터 학습 포함 — 연도 기반 split → 날짜 기반 split 전환
 # ==============================================================================
 
 from typing import List
 
 # ------------------------------------------------------------------------------
-# Chronological Split 연도 설정
+# Chronological Split 날짜 설정
+# 변경 전: TRAIN_YEAR=2024 / TEST_YEAR=2025 (연도 기반)
+# 변경 후: TRAIN_END_DATE / TEST_START_DATE (날짜 기반)
+#   학습: 2024 전체 + 2025 전반부 (3~8월)
+#   검증: 2025 후반부 (9~10월)
+# 근거: 2025 정규시즌 9~10월을 holdout으로 분리하여 검증 데이터 확보
 # ------------------------------------------------------------------------------
-TRAIN_YEAR: int = 2024   # 학습 연도: 2024 시즌 데이터 전체
-TEST_YEAR: int  = 2025   # 검증 연도: 2025 시즌 데이터 전체
+TRAIN_END_DATE:  str = "2025-08-31"   # 학습 마감일 (포함)
+TEST_START_DATE: str = "2025-09-01"   # 검증 시작일 (포함)
+
+# 하위 호환성 유지 (per_pitcher_train.py 등 직접 참조 시 사용)
+TRAIN_YEAR: int = 2024   # deprecated — TRAIN_END_DATE 사용 권장
+TEST_YEAR:  int = 2025   # deprecated — TEST_START_DATE 사용 권장
 
 # ------------------------------------------------------------------------------
 # 피처 엔지니어링 파라미터
@@ -75,9 +86,9 @@ ALLOWED_FEATURES: List[str] = [
     'pitcher_ff_pct',
     'pitcher_sl_pct',
     'pitcher_ch_pct',
-    'pitcher_si_pct',    # 신규
-    'pitcher_cu_pct',    # 신규
-    'pitcher_fc_pct',    # 신규
+    'pitcher_si_pct',
+    'pitcher_cu_pct',
+    'pitcher_fc_pct',
 
     # 그룹 I: 투수 카운트/매치업별 구종 비율 (신규 30개)
     # 카운트 ahead (투수 유리)
@@ -96,13 +107,7 @@ ALLOWED_FEATURES: List[str] = [
     'pitcher_ff_pct_vsR', 'pitcher_sl_pct_vsR', 'pitcher_ch_pct_vsR',
     'pitcher_si_pct_vsR', 'pitcher_cu_pct_vsR', 'pitcher_fc_pct_vsR',
 
-    # ===========================================================================
-    # [추가] 그룹 J: 타자 구종별 스윙 경향 — 6개
-    # 추가 이유: 투수가 특정 구종을 던질 때 타자의 스윙 반응율을 명시적으로 제공
-    #            → 모델이 타자 약점 구종을 인지하여 예측 분별력 향상 기대
-    # 계산 기준: 타자 × game_year × 구종 조합의 시즌 전체 스윙율 (사전 확정값)
-    # 누수 여부: 시즌 집계 통계 — 누수 없음
-    # ===========================================================================
+    # 그룹 J: 타자 구종별 스윙 경향 — 6개
     'batter_ff_swing_rate',
     'batter_sl_swing_rate',
     'batter_ch_swing_rate',
@@ -110,98 +115,52 @@ ALLOWED_FEATURES: List[str] = [
     'batter_cu_swing_rate',
     'batter_fc_swing_rate',
 
-    # ===========================================================================
-    # [추가] 그룹 K: PK 식별자 — 3개
-    # 추가 이유: statcast_bat_tracking 테이블의 PRIMARY KEY 구성 컬럼
-    #            ALLOWED_FEATURES에 없으면 업로드 시 NULL로 적재됨
-    #            → PK 추가 시 NULL 값으로 인해 ALTER TABLE 실패
-    # 누수 여부: 세 컬럼 모두 투구 이전 시점에 확정된 식별자이므로 누수 없음
-    #   - game_pk:       경기 고유 ID (MLB 공식, 투구 전 확정)
-    #   - at_bat_number: 경기 내 타석 순번 (현재 타석 이전 확정값)
-    #   - pitch_number:  타석 내 투구 순번 (현재 투구 이전 확정값)
-    # ===========================================================================
+    # 그룹 K: PK 식별자 — 3개
     'game_pk',
     'at_bat_number',
     'pitch_number',
 ]
 # ALLOWED_FEATURES 총 75개 (72개 피처 + 3개 PK 식별자)
-# 신규: 그룹 J 타자 스윙 경향 6개 추가 (2026-05-29)
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
-# 출처: research.md §2.2 직접 누수 24개 + §2.3 결과 누수 22개 + 검토 추가 5개
 # ------------------------------------------------------------------------------
 LEAKAGE_FEATURES: List[str] = [
-    # 직접 누수 — 릴리스 운동학 (research.md §2.2)
-    'release_speed',
-    'release_spin_rate',
-    'release_extension',
-    'release_pos_x',
-    'release_pos_y',
-    'release_pos_z',
-    'arm_angle',
+    # 직접 누수 — 릴리스 운동학
+    'release_speed', 'release_spin_rate', 'release_extension',
+    'release_pos_x', 'release_pos_y', 'release_pos_z', 'arm_angle',
     # 직접 누수 — 공기역학 추적
-    'pfx_x',
-    'pfx_z',
-    'plate_x',
-    'plate_z',
-    'vx0',
-    'vy0',
-    'vz0',
-    'ax',
-    'ay',
-    'az',
+    'pfx_x', 'pfx_z', 'plate_x', 'plate_z',
+    'vx0', 'vy0', 'vz0', 'ax', 'ay', 'az',
     'effective_speed',
-    'api_break_z_with_gravity',
-    'api_break_x_arm',
-    'api_break_x_batter_in',
+    'api_break_z_with_gravity', 'api_break_x_arm', 'api_break_x_batter_in',
     # 직접 누수 — 회전 특성
-    'spin_axis',
-    'spin_dir',
-    'hyper_speed',
+    'spin_axis', 'spin_dir', 'hyper_speed',
     # 직접 누수 — 레거시
-    'spin_rate_deprecated',
-    'break_angle_deprecated',
-    'break_length_deprecated',
-    # 결과 측정 누수 — 타격 결과 물리 (research.md §2.3)
-    'bat_speed',
-    'swing_length',
-    'attack_angle',
-    'attack_direction',
+    'spin_rate_deprecated', 'break_angle_deprecated', 'break_length_deprecated',
+    # 결과 측정 누수 — 타격 결과 물리
+    'bat_speed', 'swing_length', 'attack_angle', 'attack_direction',
     'swing_path_tilt',
     'intercept_ball_minus_batter_pos_x_inches',
     'intercept_ball_minus_batter_pos_y_inches',
     # 결과 측정 누수 — 타구 운동학
-    'launch_speed',
-    'launch_angle',
-    'launch_speed_angle',
-    'hit_distance_sc',
-    'hc_x',
-    'hc_y',
+    'launch_speed', 'launch_angle', 'launch_speed_angle',
+    'hit_distance_sc', 'hc_x', 'hc_y',
     # 결과 측정 누수 — 기대 성적
     'estimated_ba_using_speedangle',
     'estimated_woba_using_speedangle',
     'estimated_slg_using_speedangle',
     # 결과 측정 누수 — Win Expectancy 변동
-    'delta_home_win_exp',
-    'delta_run_exp',
-    'delta_pitcher_run_exp',
+    'delta_home_win_exp', 'delta_run_exp', 'delta_pitcher_run_exp',
     # 결과 측정 누수 — 사후 스코어
-    'post_away_score',
-    'post_home_score',
-    'post_bat_score',
-    'post_fld_score',
+    'post_away_score', 'post_home_score', 'post_bat_score', 'post_fld_score',
     # 결과 측정 누수 — 결과 통계
-    'woba_value',
-    'woba_denom',
-    'babip_value',
-    'iso_value',
+    'woba_value', 'woba_denom', 'babip_value', 'iso_value',
     # 결과 측정 누수 — 사후 라벨
-    'zone',
-    'hit_location',
+    'zone', 'hit_location',
     # 검토 결정 추가 드롭 (2026-05-21)
-    'age_pit_legacy',                  # 검토 3
-    'pitcher_days_until_next_game',    # 검토 5
-    'batter_days_until_next_game',     # 검토 5
+    'age_pit_legacy',
+    'pitcher_days_until_next_game',
+    'batter_days_until_next_game',
 ]
-# LEAKAGE_FEATURES 총 51개 (원본 46개 + 검토 추가 5개)
+# LEAKAGE_FEATURES 총 51개

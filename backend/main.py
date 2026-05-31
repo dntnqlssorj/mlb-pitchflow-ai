@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from backend.routers import predict
+from backend.routers import predict, arsenal
 
 # - 앱 인스턴스 생성: 메타데이터 및 Swagger 문서 제목 설정
 app = FastAPI(
@@ -54,6 +54,7 @@ app.add_middleware(
 
 # - 라우터 등록: 예측 엔드포인트 /predict 접두사로 마운트
 app.include_router(predict.router, prefix="/predict")
+app.include_router(arsenal.router, prefix="/api")
 
 
 logger = logging.getLogger("pitchflow")

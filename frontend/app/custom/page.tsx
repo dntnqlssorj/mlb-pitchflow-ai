@@ -82,7 +82,10 @@ export default function CustomPage() {
             label="PITCHER"
             placeholder="투수 이름 검색 (예: Ohtani)"
             value={form.pitcher}
-            onChange={(id, name) => setForm(f => ({ ...f, pitcher: id, pitcherName: name }))}
+            onChange={(id, name) => {
+              setForm(f => ({ ...f, pitcher: id, pitcherName: name }))
+              setResult(null)
+            }}
           />
           <PlayerSearch
             label="BATTER"
@@ -177,25 +180,8 @@ export default function CustomPage() {
           </button>
         </aside>
 
-        {/* ── 중앙 3D 뷰어 ── */}
         <main style={{ flex: 1, position: 'relative', background: '#0a0a0f', minWidth: 0 }}>
-          <SceneViewer result={result} />
-          {!result && !loading && (
-            <div style={{
-              position: 'absolute', inset: 0,
-              display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center',
-              color: '#333', pointerEvents: 'none', gap: '8px',
-            }}>
-              <div style={{ fontSize: '40px' }}>⚾</div>
-              <div style={{ fontSize: '13px', letterSpacing: '0.1em', fontFamily: "'Bebas Neue', Arial" }}>
-                PITCH TRAJECTORY VIEWER
-              </div>
-              <div style={{ fontSize: '11px', color: '#2a2a2a' }}>
-                투수 / 타자 ID 입력 후 PREDICT PITCH
-              </div>
-            </div>
-          )}
+          <SceneViewer result={result} pitcherId={form.pitcher ? Number(form.pitcher) : null} year={2026} />
         </main>
 
         {/* ── 우측 결과 패널 ── */}

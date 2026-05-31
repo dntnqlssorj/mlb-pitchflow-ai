@@ -4,7 +4,7 @@ from pathlib import Path
 
 # MLB 데이터 최상위 경로를 지정합니다. (현재 프로젝트 폴더 기준)
 # Path 객체를 사용하면 맥, 윈도우 상관없이 슬래시(/)로 안전하게 경로를 이을 수 있습니다.
-BASE_DIR = Path("data/MLB All Data")
+BASE_DIR = Path("data") if Path("data/Catcher").exists() else Path("data/MLB All Data")
 
 def load_framing_data() -> pd.DataFrame:
     """

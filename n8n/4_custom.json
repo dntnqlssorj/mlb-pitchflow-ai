@@ -140,7 +140,7 @@
         "promptType": "define",
         "text": "=## 구종 예측 복기 분석 요청\n\n### 경기 상황\n- 투수 ID: {{ $('Webhook Trigger').first().json.pitcher_id }}\n- 타자 ID: {{ $('Webhook Trigger').first().json.batter_id }}\n- 이닝: {{ $('Webhook Trigger').first().json.inning }}\n- 볼카운트: {{ $('Webhook Trigger').first().json.balls }}볼 {{ $('Webhook Trigger').first().json.strikes }}스트라이크\n- 아웃: {{ $('Webhook Trigger').first().json.outs }}아웃\n- 주자: 1루={{ $('Webhook Trigger').first().json.on_1b ?? 0 }}, 2루={{ $('Webhook Trigger').first().json.on_2b ?? 0 }}, 3루={{ $('Webhook Trigger').first().json.on_3b ?? 0 }}\n- 실제 투구 (복기): {{ $('Webhook Trigger').first().json.actual_pitch ?? 'null (입력 안 됨)' }}\n\n### 타자 최근 7일 성적\n{{ JSON.stringify($('타자 최근 성적 조회').first().json.stats?.[0]?.splits?.[0]?.stat ?? {}, null, 2) }}\n\n\n### AI 예측 결과\n- 예측 구종: {{ $('FastAPI 투구 예측').first().json.predicted_pitch }}\n- 신뢰도: {{ ($('FastAPI 투구 예측').first().json.confidence * 100).toFixed(1) }}%\n- 라우팅: {{ $('FastAPI 투구 예측').first().json.routing }}\n- 구종별 확률:\n{{ JSON.stringify($('FastAPI 투구 예측').first().json.pitch_probabilities, null, 2) }}\n\n위 데이터를 종합하여 구종 예측 복기 해설 JSON을 반환해라.\nactual_pitch가 null이면 vs_actual은 반드시 null로 반환해라.",
         "options": {
-          "systemMessage": "너는 MLB 투구 전술 복기 분석 전문가다.\n예측 확률, 타자 최근 성적, 상대전적을 종합하여 해설해라.\nactual_pitch가 있으면 예측과 실제를 비교해라.\nactual_pitch가 null이면 vs_actual은 null로 반환해라.\n한국어로 작성해라. 추측하지 마라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"vs_actual\": \"string | null\"\n}"
+          "systemMessage": "너는 MLB 투구 전술 복기 분석 전문가다.\n예측 확률, 타자 최근 성적, 상대전적을 종합하여 해설해라.\nactual_pitch가 있으면 예측과 실제를 비교해라.\nactual_pitch가 null이면 vs_actual은 null로 반환해라.\n구종 코드 정의:\nFF=포심 패스트볼, SI=싱커, SL=슬라이더, CH=체인지업, FC=커터,\nST=스위퍼, CU=커브, FS=스플리터, KC=너클커브, SV=스위프볼,\nFA=패스트볼, EP=이퍼스, KN=너클볼, CS=슬로우커브, SC=스크류볼,\nFO=포크볼, PO=포시볼\n반드시 위 정의를 기준으로 구종을 설명해라.\n한국어로 작성해라. 추측하지 마라.\n출력은 반드시 아래 JSON만 반환해라:\n{\n  \"commentary\": \"string\",\n  \"reasoning\": \"string\",\n  \"vs_actual\": \"string | null\"\n}"
         }
       },
       "id": "3cf49a3d-1921-4b13-8ca2-cc51c3cf3551",
@@ -296,7 +296,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "4663d0d5-993f-4a4a-94e4-17d2714ad553",
+  "versionId": "3ae65811-5441-48d4-bdff-3122a9df15aa",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "e4791dfed7fed1a2dcc7308e6b58671e08764e0ca9fd52110f1e4604e9f8b22d"
