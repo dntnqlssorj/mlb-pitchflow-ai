@@ -65,7 +65,7 @@ export default function MLBLivePage() {
   useEffect(() => {
     if (!selectedGamePk) { setSituation(null); setResult(null); return }
     fetchLive(selectedGamePk, true)
-    const id = setInterval(() => fetchLive(selectedGamePk), 15000)
+    const id = setInterval(() => fetchLive(selectedGamePk), 5000)
     return () => clearInterval(id)
   }, [selectedGamePk])
 
@@ -158,7 +158,7 @@ export default function MLBLivePage() {
                 boxShadow: `0 0 6px ${loadingLive ? '#F59E0B' : '#22C55E'}`,
               }} />
               <span style={{ fontSize: '10px', color: '#555' }}>
-                {loadingLive ? 'SYNCING...' : '15s AUTO REFRESH'}
+                {loadingLive ? 'SYNCING...' : '5s AUTO REFRESH'}
               </span>
             </div>
           )}

@@ -8,6 +8,7 @@ from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.utils.class_weight import compute_sample_weight
 
 from ml_engine.train import prepare_training_data
 
@@ -62,9 +63,11 @@ def train_stacking(sampling_rate: float = 1.0):
         lgb_fold = LGBMClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1, verbose=-1)
         cat_fold = CatBoostClassifier(iterations=500, depth=6, learning_rate=0.1, loss_function='MultiClass', random_seed=42, verbose=0)
         
-        xgb_fold.fit(X_tr, y_tr)
-        lgb_fold.fit(X_tr, y_tr)
-        cat_fold.fit(X_tr, y_tr)
+        sample_weights_tr = compute_sample_weight("balanced", y_tr)
+        
+        xgb_fold.fit(X_tr, y_tr, sample_weight=sample_weights_tr)
+        lgb_fold.fit(X_tr, y_tr, sample_weight=sample_weights_tr)
+        cat_fold.fit(X_tr, y_tr, sample_weight=sample_weights_tr)
         
         oof_xgb[val_idx] = xgb_fold.predict_proba(X_val)
         oof_lgb[val_idx] = lgb_fold.predict_proba(X_val)
@@ -95,6 +98,8 @@ def train_stacking(sampling_rate: float = 1.0):
     MODEL_DIR = Path('ml_engine/models')
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     
+    sample_weights_all = compute_sample_weight("balanced", y_train)
+    
     print("  - [Level-0] XGBoost 전체 학습 중...")
     best_xgb = XGBClassifier(
         n_estimators=541,
@@ -111,17 +116,17 @@ def train_stacking(sampling_rate: float = 1.0):
         eval_metric='mlogloss',
         enable_categorical=False
     )
-    best_xgb.fit(X_train, y_train)
+    best_xgb.fit(X_train, y_train, sample_weight=sample_weights_all)
     joblib.dump(best_xgb, MODEL_DIR / 'xgboost_pitch_model.pkl', compress=3)
     
     print("  - [Level-0] LightGBM 전체 학습 중...")
     best_lgb = LGBMClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1, verbose=-1)
-    best_lgb.fit(X_train, y_train)
+    best_lgb.fit(X_train, y_train, sample_weight=sample_weights_all)
     joblib.dump(best_lgb, MODEL_DIR / 'lightgbm_pitch_model.pkl', compress=3)
     
     print("  - [Level-0] CatBoost 전체 학습 중...")
     best_cat = CatBoostClassifier(iterations=500, depth=6, learning_rate=0.1, loss_function='MultiClass', random_seed=42, verbose=100)
-    best_cat.fit(X_train, y_train)
+    best_cat.fit(X_train, y_train, sample_weight=sample_weights_all)
     joblib.dump(best_cat, MODEL_DIR / 'catboost_pitch_model.pkl', compress=3)
     
     xgb_test_proba = best_xgb.predict_proba(X_test)

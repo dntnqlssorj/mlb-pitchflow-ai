@@ -80,6 +80,10 @@ def fetch_pitcher_season_baseline(pitcher_id: int, game_year: int) -> dict:
             return {
                 "base_speed": val.get("base_speed") or 0.0,
                 "base_spin":  val.get("base_spin")  or 0.0,
+                "base_release_pos_x": val.get("season_avg_release_pos_x") or 0.0,
+                "base_release_pos_y": val.get("season_avg_release_pos_y") or 0.0,
+                "base_release_pos_z": val.get("season_avg_release_pos_z") or 0.0,
+                "base_arm_angle": val.get("season_avg_arm_angle") or 0.0,
                 "p_throws":   val.get("p_throws", "R"),
                 "source":     "pkl"
             }
@@ -95,6 +99,10 @@ def fetch_pitcher_season_baseline(pitcher_id: int, game_year: int) -> dict:
             return {
                 "base_speed": val.get("base_speed") or 0.0,
                 "base_spin":  val.get("base_spin")  or 0.0,
+                "base_release_pos_x": val.get("season_avg_release_pos_x") or 0.0,
+                "base_release_pos_y": val.get("season_avg_release_pos_y") or 0.0,
+                "base_release_pos_z": val.get("season_avg_release_pos_z") or 0.0,
+                "base_arm_angle": val.get("season_avg_arm_angle") or 0.0,
                 "p_throws":   val.get("p_throws", "R"),
                 "source":     "pkl_fallback"
             }
@@ -105,6 +113,10 @@ def fetch_pitcher_season_baseline(pitcher_id: int, game_year: int) -> dict:
     return {
         "base_speed": 0.0,
         "base_spin":  0.0,
+        "base_release_pos_x": 0.0,
+        "base_release_pos_y": 0.0,
+        "base_release_pos_z": 0.0,
+        "base_arm_angle": 0.0,
         "p_throws":   "R",
         "source":     "fallback_zero"
     }
@@ -308,8 +320,11 @@ def enrich_pitch_context(
     fielder_ids:           List[int],
     game_pk:               int,
     game_year:             int,
+    on_1b:                 int,
     on_2b:                 int,
     on_3b:                 int,
+    outs_when_up:          int,
+    home_score_diff:       int,
     pitch_count_override:  Optional[int] = None,
     inning:                int = 1,
     balls:                 int = 0,
@@ -435,6 +450,20 @@ def enrich_pitch_context(
     prev_pitch_source  = "primary_pitch_approx" if primary_pitch is not None else "fallback_zero"
 
     # ------------------------------------------------------------------
+    # 10-A. [신규] Leverage Index & Late Close 인메모리 연산
+    # ------------------------------------------------------------------
+    base_runners = (1 if on_1b > 0 else 0) + (1 if on_2b > 0 else 0) + (1 if on_3b > 0 else 0)
+    leverage_index = (base_runners + 1) * inning * (abs(home_score_diff) + 1) / (outs_when_up + 1)
+    late_close = 1 if inning >= 7 and abs(home_score_diff) <= 2 else 0
+
+    # ------------------------------------------------------------------
+    # 10-B. [신규] 시퀀스 콤보 인메모리 연산
+    # ------------------------------------------------------------------
+    pitch_combo_12 = prev_pitch_1 * 100 + prev_pitch_2
+    pitch_combo_23 = prev_pitch_2 * 100 + prev_pitch_3
+    pitch_combo_123 = prev_pitch_1 * 10000 + prev_pitch_2 * 100 + prev_pitch_3
+
+    # ------------------------------------------------------------------
     # 11. Latency 측정
     # ------------------------------------------------------------------
     enrichment_latency_ms = (time.perf_counter() - t_start) * 1000
@@ -469,6 +498,31 @@ def enrich_pitch_context(
         "prev_pitch_1":     prev_pitch_1,
         "prev_pitch_2":     prev_pitch_2,
         "prev_pitch_3":     prev_pitch_3,
+        
+        # [신규] 추가 3종 피처 세트
+        "base_release_pos_x": baseline_result.get("base_release_pos_x", 0.0),
+        "base_release_pos_y": baseline_result.get("base_release_pos_y", 0.0),
+        "base_release_pos_z": baseline_result.get("base_release_pos_z", 0.0),
+        "base_arm_angle":     baseline_result.get("base_arm_angle", 0.0),
+        "leverage_index":     leverage_index,
+        "late_close":         late_close,
+        "pitch_combo_12":     pitch_combo_12,
+        "pitch_combo_23":     pitch_combo_23,
+        "pitch_combo_123":    pitch_combo_123,
+        
+        # [신규] 상호작용 피처 12개
+        "count_x_ff": count_situation * pitcher_ff_pct,
+        "count_x_sl": count_situation * pitcher_sl_pct,
+        "count_x_ch": count_situation * pitcher_ch_pct,
+        "count_x_si": count_situation * pitcher_si_pct,
+        "count_x_cu": count_situation * pitcher_cu_pct,
+        "count_x_fc": count_situation * pitcher_fc_pct,
+        "matchup_x_ff": matchup_type * pitcher_ff_pct,
+        "matchup_x_sl": matchup_type * pitcher_sl_pct,
+        "matchup_x_ch": matchup_type * pitcher_ch_pct,
+        "matchup_x_si": matchup_type * pitcher_si_pct,
+        "matchup_x_cu": matchup_type * pitcher_cu_pct,
+        "matchup_x_fc": matchup_type * pitcher_fc_pct,
 
         # 메타데이터
         "enrichment_latency_ms": round(enrichment_latency_ms, 2),

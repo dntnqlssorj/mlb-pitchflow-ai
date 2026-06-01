@@ -148,4 +148,4 @@ def train_transformer(sampling_rate=0.1):
     return best_f1
 
 if __name__ == '__main__':
-    train_transformer(sampling_rate=1.0)
+    train_transformer(sampling_rate=0.1)

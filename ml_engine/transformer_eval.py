@@ -5,7 +5,8 @@ import numpy as np
 import joblib
 from pathlib import Path
 from torch.utils.data import DataLoader
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, roc_auc_score
+import torch.nn.functional as F
 
 from ml_engine.train import prepare_training_data
 from ml_engine.sequence_dataset import build_sequence_dataset
@@ -18,8 +19,8 @@ def evaluate_transformer():
     sys.stdout.flush()
 
     try:
-        # 1. 100% 전체 데이터 로드 및 label encoder 로딩
-        _, _, _, _, feat_names, label_encoder, df = prepare_training_data(sampling_rate=1.0, return_df=True)
+        # 1. 10% 데이터 로드 및 label encoder 로딩
+        _, _, _, _, feat_names, label_encoder, df = prepare_training_data(sampling_rate=0.1, return_df=True)
         n_classes = len(label_encoder.classes_)
         print(f"  [확인] 전체 클래스 수: {n_classes}개")
         sys.stdout.flush()
@@ -47,18 +48,31 @@ def evaluate_transformer():
 
         # 6. 추론 및 F1 Score 측정
         preds = []
+        probas = []
         all_labels = []
         with torch.no_grad():
             for xb, yb in val_loader:
-                preds.append(model(xb).argmax(1).numpy())
+                out = model(xb)
+                probs = F.softmax(out, dim=1)
+                preds.append(out.argmax(1).numpy())
+                probas.append(probs.numpy())
                 all_labels.append(yb.numpy())
 
         preds = np.concatenate(preds)
+        probas = np.concatenate(probas)
         all_labels = np.concatenate(all_labels)
 
         val_f1 = f1_score(all_labels, preds, average='weighted', zero_division=0)
+        
+        try:
+            val_auc = roc_auc_score(all_labels, probas, multi_class='ovr', average='weighted')
+        except ValueError:
+            # Not all classes might be present in the validation set
+            val_auc = float('nan')
+            
         print(f"\n[평가 완료]")
         print(f"  🏆 Transformer 2025 검증 Weighted F1-Score: {val_f1 * 100:.2f}%")
+        print(f"  🏆 Transformer 2025 검증 ROC AUC (OVR):      {val_auc * 100:.2f}%")
         sys.stdout.flush()
 
     except Exception as e:

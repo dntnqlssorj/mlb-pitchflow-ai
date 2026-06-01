@@ -36,12 +36,20 @@ def build_season_baseline(bat_df: pd.DataFrame) -> pd.DataFrame:
         .agg({
             'release_speed': 'mean',
             'release_spin_rate': 'mean',
+            'release_pos_x': 'mean',
+            'release_pos_y': 'mean',
+            'release_pos_z': 'mean',
+            'arm_angle': 'mean',
             'p_throws': 'first',
         })
         .reset_index()
         .rename(columns={
             'release_speed':     'season_avg_speed',
             'release_spin_rate': 'season_avg_spin',
+            'release_pos_x':     'season_avg_release_pos_x',
+            'release_pos_y':     'season_avg_release_pos_y',
+            'release_pos_z':     'season_avg_release_pos_z',
+            'arm_angle':         'season_avg_arm_angle',
         })
     )
 
@@ -151,13 +159,14 @@ def calculate_pitcher_stamina_decay(
     return df_feat
 
 
+
 def add_situational_features(df):
     """
     [상황별 파생 변수 추가]
-    - count_situation: 3*balls + strikes (볼카운트 상황을 단일 수치로 인코딩)
+    - count_situation: 10*balls + strikes (볼카운트 상황을 단일 수치로 인코딩)
     - matchup_type: 타자(stand)와 투수(p_throws)의 좌우 매치업 (LL=0, LR=1, RL=2, RR=3, 그외 4)
     """
-    df['count_situation'] = df['balls'] * 3 + df['strikes']
+    df['count_situation'] = df['balls'] * 10 + df['strikes']
     if 'p_throws' in df.columns:
         matchup_map = {'LL':0,'LR':1,'RL':2,'RR':3}
         df['matchup_type'] = (
@@ -529,4 +538,52 @@ def add_pitcher_situation_features(df: pd.DataFrame) -> pd.DataFrame:
     print(f"  카운트 상황별: {len(situations) * len(TARGET_PITCHES)}개")
     print(f"  매치업별: {len(matchups) * len(TARGET_PITCHES)}개")
     print("Pitcher Situation 피처 엔지니어링 완료")
+    return df
+
+def add_interaction_features(df):
+    """
+    [상호작용 피처 추가]
+    - count_situation과 투수별 구종 구사 비율 간의 상호작용
+    - matchup_type과 투수별 구종 구사 비율 간의 상호작용
+    """
+    print("상호작용 피처 엔지니어링 시작...")
+    pt_list = ['ff', 'sl', 'ch', 'si', 'cu', 'fc']
+    for pt in pt_list:
+        col_pct = f'pitcher_{pt}_pct'
+        if col_pct in df.columns:
+            df[f'count_x_{pt}'] = df['count_situation'] * df[col_pct]
+            df[f'matchup_x_{pt}'] = df['matchup_type'] * df[col_pct]
+        else:
+            df[f'count_x_{pt}'] = 0.0
+            df[f'matchup_x_{pt}'] = 0.0
+    print("상호작용 피처 생성 완료")
+    return df
+
+def add_sequence_combo_features(df):
+    print("시퀀스 콤보 피처 엔지니어링 시작...")
+    df['pitch_combo_12'] = df['prev_pitch_1'] * 100 + df['prev_pitch_2']
+    df['pitch_combo_23'] = df['prev_pitch_2'] * 100 + df['prev_pitch_3']
+    df['pitch_combo_123'] = df['prev_pitch_1'] * 10000 + df['prev_pitch_2'] * 100 + df['prev_pitch_3']
+    return df
+
+def add_leverage_features(df):
+    print("Leverage 피처 엔지니어링 시작...")
+    base_runners = df['on_1b'].clip(0, 1) + df['on_2b'].clip(0, 1) + df['on_3b'].clip(0, 1)
+    df['leverage_index'] = (base_runners + 1) * df['inning'] * (df['home_score_diff'].abs() + 1) / (df['outs_when_up'] + 1)
+    df['late_close'] = ((df['inning'] >= 7) & (df['home_score_diff'].abs() <= 2)).astype(int)
+    return df
+
+def add_release_pos_features(df, season_baseline_df):
+    print("Release Position 평균 피처 병합 시작...")
+    # calculate_pitcher_stamina_decay에서 이미 season_baseline_df 전체가 병합되었으므로 rename만 수행
+    df = df.rename(columns={
+        'season_avg_release_pos_x': 'base_release_pos_x',
+        'season_avg_release_pos_y': 'base_release_pos_y',
+        'season_avg_release_pos_z': 'base_release_pos_z',
+        'season_avg_arm_angle': 'base_arm_angle',
+    })
+    df['base_release_pos_x'] = df['base_release_pos_x'].fillna(0.0)
+    df['base_release_pos_y'] = df['base_release_pos_y'].fillna(0.0)
+    df['base_release_pos_z'] = df['base_release_pos_z'].fillna(0.0)
+    df['base_arm_angle'] = df['base_arm_angle'].fillna(0.0)
     return df

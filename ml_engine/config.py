@@ -82,6 +82,20 @@ ALLOWED_FEATURES: List[str] = [
     'prev_pitch_2',
     'prev_pitch_3',
 
+    # 그룹 H: 상호작용 피처
+    'count_x_ff',
+    'count_x_sl',
+    'count_x_ch',
+    'count_x_si',
+    'count_x_cu',
+    'count_x_fc',
+    'matchup_x_ff',
+    'matchup_x_sl',
+    'matchup_x_ch',
+    'matchup_x_si',
+    'matchup_x_cu',
+    'matchup_x_fc',
+
     # 그룹 G: Pitcher 구종 레퍼토리 비율 (신규)
     'pitcher_ff_pct',
     'pitcher_sl_pct',
@@ -119,8 +133,18 @@ ALLOWED_FEATURES: List[str] = [
     'game_pk',
     'at_bat_number',
     'pitch_number',
+    # 그룹 L: 신규 추가 (시퀀스 콤보, Leverage, Release Pos 평균)
+    'pitch_combo_12',
+    'pitch_combo_23',
+    'pitch_combo_123',
+    'leverage_index',
+    'late_close',
+    'base_release_pos_x',
+    'base_release_pos_y',
+    'base_release_pos_z',
+    'base_arm_angle',
 ]
-# ALLOWED_FEATURES 총 75개 (72개 피처 + 3개 PK 식별자)
+# ALLOWED_FEATURES 총 84개
 
 # ------------------------------------------------------------------------------
 # LEAKAGE_FEATURES — 누수 드롭 목록 (검증 및 문서화 목적 참조 상수)
@@ -128,7 +152,6 @@ ALLOWED_FEATURES: List[str] = [
 LEAKAGE_FEATURES: List[str] = [
     # 직접 누수 — 릴리스 운동학
     'release_speed', 'release_spin_rate', 'release_extension',
-    'release_pos_x', 'release_pos_y', 'release_pos_z', 'arm_angle',
     # 직접 누수 — 공기역학 추적
     'pfx_x', 'pfx_z', 'plate_x', 'plate_z',
     'vx0', 'vy0', 'vz0', 'ax', 'ay', 'az',

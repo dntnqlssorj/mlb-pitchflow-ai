@@ -27,10 +27,14 @@ from ml_engine.feature_engineering import (
     integrate_catcher_blocking,
     integrate_fielding_oaa,
     add_pitch_sequence_features,
+    add_sequence_combo_features,
     add_pitcher_repertoire_features,
     add_situational_features,
+    add_leverage_features,
     add_pitcher_situation_features,
     add_batter_swing_tendency_features,
+    add_interaction_features,
+    add_release_pos_features,
 )
 from ml_engine.config import (
     ALLOWED_FEATURES,
@@ -92,10 +96,14 @@ def prepare_training_data(sampling_rate: float = 0.1, return_df: bool = False) -
     df = integrate_catcher_blocking(df, datasets['blocking'])
     df = integrate_fielding_oaa(df, datasets['oaa'])
     df = add_pitch_sequence_features(df)
+    df = add_sequence_combo_features(df)
     df = add_pitcher_repertoire_features(df)
     df = add_situational_features(df)
+    df = add_leverage_features(df)
     df = add_pitcher_situation_features(df)
     df = add_batter_swing_tendency_features(df)
+    df = add_interaction_features(df)
+    df = add_release_pos_features(df, season_baseline_df)
 
     # game_date 재변환 (피처 엔지니어링 체인 후 타입 유지 보장)
     df['game_date'] = pd.to_datetime(df['game_date'])

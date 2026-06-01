@@ -4,6 +4,7 @@ from pathlib import Path
 from xgboost import XGBClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import f1_score
+from sklearn.utils.class_weight import compute_sample_weight
 from ml_engine.train import prepare_training_data
 
 MODEL_DIR  = Path('ml_engine/models')
@@ -71,7 +72,8 @@ def train_per_pitcher(sampling_rate=1.0):
             verbosity=0,
             eval_metric='mlogloss'
         )
-        model_p.fit(X_p, y_p_enc)
+        sample_weights_p = compute_sample_weight("balanced", y_p_enc)
+        model_p.fit(X_p, y_p_enc, sample_weight=sample_weights_p)
 
         # 검증 (학습데이터에서 본 구종만 평가 대상으로 삼음)
         if test_mask.sum() >= 10:
