@@ -33,7 +33,7 @@ catboost_info/
 
 # 임시 파일 및 로그
 *.log
-models.zip
+*.zip
 scratch/
 MLB-PitchFlow-AI/
 
