@@ -31,7 +31,7 @@ ROLLING_WINDOW_SIZE: int   = 5             # 미사용 (향후 확장 대비 보
 MIN_PITCH_TYPE_COUNT: int  = 10            # 희귀 구종 필터 하한
 
 # ------------------------------------------------------------------------------
-# P0-C: ALLOWED_FEATURES — 누수 없는 허용 피처 화이트리스트 (38개 최종 확정)
+# P0-C: ALLOWED_FEATURES — 누수 없는 허용 피처 화이트리스트 (84개 최종 확정)
 # 검토 반영 기준: 2026-05-21
 #   [검토 1] home_win_exp, bat_win_exp → 드롭 (누수 방어)
 #   [검토 2] n_priorpa_thisgame_player_at_bat → 허용
@@ -128,21 +128,6 @@ ALLOWED_FEATURES: List[str] = [
     'batter_si_swing_rate',
     'batter_cu_swing_rate',
     'batter_fc_swing_rate',
-
-    # 그룹 K: PK 식별자 — 3개
-    'game_pk',
-    'at_bat_number',
-    'pitch_number',
-    # 그룹 L: 신규 추가 (시퀀스 콤보, Leverage, Release Pos 평균)
-    'pitch_combo_12',
-    'pitch_combo_23',
-    'pitch_combo_123',
-    'leverage_index',
-    'late_close',
-    'base_release_pos_x',
-    'base_release_pos_y',
-    'base_release_pos_z',
-    'base_arm_angle',
 ]
 # ALLOWED_FEATURES 총 84개
 
