@@ -1,7 +1,7 @@
 # MLB PitchFlow AI
 
 **MLB Statcast 데이터 기반 실시간 투구 구종 예측 엔진 및 서빙 플랫폼**
-*(Real-time Pitch Type Prediction Engine & Serving Platform using MLB Statcast Data)*
+_(Real-time Pitch Type Prediction Engine & Serving Platform using MLB Statcast Data)_
 
 SW중심대학 산학협력 프로젝트 | 2026-03-19
 
@@ -19,13 +19,13 @@ MLB PitchFlow AI는 MLB Statcast 약 144만 행의 정형 데이터를 기반으
 
 본 프로젝트는 이를 **Target Leakage** 문제로 규정하고, 51개 누수 피처를 전면 제거한 후 실제 예측 가능한 피처만으로 모델을 재설계하였다.
 
-| 구분 | 이전 (누수 포함) | 이후 (누수 제거) |
-|---|---|---|
-| F1-Score | 95.75% (가짜) | 44.72% (실측) |
-| 학습/검증 분할 | 무작위 8:2 | Date-based Chronological Split |
-| 허용 피처 수 | 112개 (누수 포함) | 84개 정의 / 75개 실사용 |
-| 출력 구종 클래스 | — | 18개 (희귀 구종 → `OT` 통합) |
-| 예측 구조 | 사후 역분류 | Pre-Pitch 실시간 예측 |
+| 구분             | 이전 (누수 포함)  | 이후 (누수 제거)               |
+| ---------------- | ----------------- | ------------------------------ |
+| F1-Score         | 95.75% (가짜)     | 44.72% (실측)                  |
+| 학습/검증 분할   | 무작위 8:2        | Date-based Chronological Split |
+| 허용 피처 수     | 112개 (누수 포함) | 84개 정의 / 75개 실사용        |
+| 출력 구종 클래스 | —                 | 18개 (희귀 구종 → `OT` 통합)   |
+| 예측 구조        | 사후 역분류       | Pre-Pitch 실시간 예측          |
 
 ---
 
@@ -50,22 +50,22 @@ Layer 4  FastAPI → n8n → Next.js 서빙 | 3D 투구 궤적 시각화 (Three.
 
 ### 모델 성능 비교 (Model Performance Comparison)
 
-| 모델 | Macro F1-Score |
-|---|---|
-| Random Forest (Baseline) | 36.09% |
-| LightGBM | 39.03% |
-| CatBoost | 39.30% |
-| XGBoost (Standalone) | 42.52% |
-| **Stacking Ensemble** | **44.72%** |
-| Per-Pitcher 평균 (763명) | 41.04% |
+| 모델                     | Macro F1-Score |
+| ------------------------ | -------------- |
+| Random Forest (Baseline) | 36.09%         |
+| LightGBM                 | 39.03%         |
+| CatBoost                 | 39.30%         |
+| XGBoost (Standalone)     | 42.52%         |
+| **Stacking Ensemble**    | **44.72%**     |
+| Per-Pitcher 평균 (763명) | 41.04%         |
 
 > 문헌 상한 참고: Bright et al. — Pre-release 예측 가능 구간 약 44~55%
 
 ### Ablation Study
 
-| 조건 | F1 변화 |
-|---|---|
-| `stamina_index` 제거 | −0.85%p |
+| 조건                         | F1 변화                    |
+| ---------------------------- | -------------------------- |
+| `stamina_index` 제거         | −0.85%p                    |
 | Ball-flight features 포함 시 | ~99% (Target Leakage 확인) |
 
 ---
@@ -133,15 +133,15 @@ Supabase 실시간 쿼리는 네트워크 지연으로 인해 추론 시 300ms~1
 
 ## 기술 스택 (Tech Stack)
 
-| 영역 | 기술 |
-|---|---|
-| ML (Tree) | Python 3.11, XGBoost, LightGBM, CatBoost, scikit-learn |
-| ML (Deep Learning) | PyTorch, Bi-LSTM, Transformer |
-| Backend | FastAPI, joblib, uvicorn |
-| Frontend | Next.js 15, Three.js (3D 투구 궤적), Tailwind CSS |
-| Automation | n8n (local, port 5678) |
-| AI Commentary | OpenAI GPT-4o-mini (한국어 게임 리포트) |
-| Data | MLB Statcast (~1.44M rows, 2024~2025), MLB Stats API |
+| 영역               | 기술                                                   |
+| ------------------ | ------------------------------------------------------ |
+| ML (Tree)          | Python 3.11, XGBoost, LightGBM, CatBoost, scikit-learn |
+| ML (Deep Learning) | PyTorch, Bi-LSTM, Transformer                          |
+| Backend            | FastAPI, joblib, uvicorn                               |
+| Frontend           | Next.js 15, Three.js (3D 투구 궤적), Tailwind CSS      |
+| Automation         | n8n (local, port 5678)                                 |
+| AI Commentary      | OpenAI GPT-4o-mini (한국어 게임 리포트)                |
+| Data               | MLB Statcast (~1.44M rows, 2024~2025), MLB Stats API   |
 
 ---
 
@@ -212,9 +212,9 @@ curl -X POST "http://localhost:8000/predict/pitch" \
 
 ## 참고 문헌 (References)
 
-- Bright et al. — *Pre-release pitch type prediction ceiling: 44–55%*
-- Sidle & Tran (2018) — *Predicting Pitch Types in Baseball*
-- Lee (2022) — *Benchmark comparisons for pitch classification*
+- Bright et al. — _Pre-release pitch type prediction ceiling: 44–55%_
+- Sidle & Tran (2018) — _Predicting Pitch Types in Baseball_
+- Lee (2022) — _Benchmark comparisons for pitch classification_
 - Tom Tango, " The Book" — Domain feature design reference
 
 ---
@@ -229,4 +229,4 @@ curl -X POST "http://localhost:8000/predict/pitch" \
 
 ---
 
-*SW중심대학 산학협력 프로젝트 — MLB PitchFlow AI*
+_SW중심대학 산학협력 프로젝트 — MLB PitchFlow AI_
