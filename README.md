@@ -3,7 +3,7 @@
 **MLB Statcast 데이터 기반 실시간 투구 구종 예측 엔진 및 서빙 플랫폼**
 *(Real-time Pitch Type Prediction Engine & Serving Platform using MLB Statcast Data)*
 
-SW중심대학 산학협력 프로젝트 | 2025~2026
+SW중심대학 산학협력 프로젝트 | 2026-03-19
 
 ---
 
