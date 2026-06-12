@@ -224,7 +224,7 @@ curl -X POST "http://localhost:8000/predict/pitch" \
 | 역할 | GitHub |
 |---|---|
 | ML 엔지니어링 / 백엔드 | [@dntnqlssoRj](https://github.com/dntnqlssoRj) |
-| 프론트엔드 / 시각화 | [@doxjsj](https://github.com/doxjsj) |
+| 프론트엔드 / 시각화 | [[@Kang-chaeYeon](https://github.com/Kang-chaeYeon) @dntnqlssoRj](https://github.com/dntnqlssoRj) 공동참여|
 | 데이터 파이프라인 / n8n | [@Kang-chaeYeon](https://github.com/Kang-chaeYeon) |
 
 ---
